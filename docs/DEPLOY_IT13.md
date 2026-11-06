@@ -109,6 +109,24 @@ PY
 ./build/sentry_robot --video ~/video/3.avi --serial "" --config config/sentry.yaml
 ```
 
+MVS 适配骨架（保留旧 `io/hikrobot.*`，只替换取帧循环）：
+
+```cpp
+#include "hikrobot.hpp"   // 旧仓 io/include，需要 MVS SDK
+
+io::HikRobot camera(exposure_us, gain, "2bdf:0001");
+time_point t;
+cv::Mat frame;
+while (running) {
+    camera.Query(frame, t);                 // 旧驱动：图像 + 时间戳
+    const double stamp = toSeconds(t);      // steady_clock -> double
+    auto out = vision.process(frame, stamp, yaw, pitch, roll);
+    // ... 串口发送 / 可视化
+}
+```
+
+如果 MVS SDK 能给“曝光中点”时间，优先用它；否则用 `t - exposure/2` 修正。
+
 - `--comp-yaw/--comp-pitch` 是旧仓 `Transmit.compensate_*` 的等价物；先 0，实测偏置后再加。
 - 程序内 `HoldFound 0.5 s`：目标短暂丢失时保持上一帧角度，但**不发火**。
 - 串口 21 B 帧：`AA BB [yaw][pitch][yaw_vel][ui_x] found fire BB`，

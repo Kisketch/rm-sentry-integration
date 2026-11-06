@@ -84,10 +84,11 @@ target:
    lost_keep_time: 1.0
    association_gate: 1.0
    switch_margin: 0.5
-   require_tracking: 0
-   # Earlier entries win.  Put the outpost first only if the match rules allow it;
-   # for a normal sentry engagement, infantry/hero are usually the priority.
-   priority: [ "outpost", "1", "2", "3", "4", "guard", "base" ]
+   require_tracking: 1
+   # Earlier entries win.  A sentry is threatened by shooters, not by the
+   # outpost: shoot 3/4 first, keep outpost last (it is 2000 HP and rarely a
+   # threat).  Reorder per match rule if the sentry is tasked with the base.
+   priority: [ "3", "4", "1", "2", "guard", "base", "outpost" ]
 
 ballistic:
    bullet_speed: 25.

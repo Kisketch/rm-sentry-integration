@@ -43,8 +43,14 @@ int TargetManager::matchEntry(const ArmorObservation& obs, double stamp) const {
         const TargetState s = e.snapshot(stamp);
         const TrackState st = e.state();
         if (st == TrackState::LOST && e.last_seen <= 0) continue;
-        const double gate = st == TrackState::LOST ? 2.0 * target_cfg_.association_gate
-                                                   : target_cfg_.association_gate;
+        // Range-scaled gate: a fixed 1 m gate merges two robots standing
+        // within 1 m of each other at 10 m.  Close in the geometry is well
+        // constrained (0.4x), far out the same gate is needed (1.0x).
+        // LOST tracks get 1.4x rather than 2x: 2x was re-acquiring a target
+        // into its neighbour.
+        const double range_scale = std::clamp(0.35 + 0.065 * obs.distance, 0.40, 1.0);
+        const double gate = target_cfg_.association_gate * range_scale *
+                            (st == TrackState::LOST ? 1.4 : 1.0);
         // Prefer a TRACKING track when two candidates are close.
         const double penalty = st == TrackState::TRACKING ? 0.0 : 0.25;
         for (int k = 0; k < s.armors_num; ++k) {
