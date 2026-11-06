@@ -1,0 +1,190 @@
+{
+  "settings": {
+    "seconds": 10.0,
+    "noise": 0.7,
+    "dropout": 0.05,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "iterations": 8,
+    "evals": 8
+  },
+  "baseline_params": {
+    "q_xyz": 1.0,
+    "q_yaw": 30.0,
+    "q_adapt_max": 20.0,
+    "nis_alpha": 0.2,
+    "r_yaw": 0.01,
+    "max_fire_facing": 30.0,
+    "side_angle": 20.0,
+    "center_mode_omega": 12.0
+  },
+  "baseline": {
+    "hits": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 99.4,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 43.1,
+      "fast spin 10 rad/s at 4 m": 99.33333333333333,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 17.933333333333334,
+      "spin 4 rad/s approaching 7 m -> 3 m": 98.26666666666667,
+      "variable spin 0.5..4.5 rad/s at 6 m": 97.13333333333334,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 97.6,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 86.26666666666667
+    },
+    "hits_per_sec": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 16.6,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 5.033333333333333,
+      "fast spin 10 rad/s at 4 m": 15.166666666666666,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 2.6,
+      "spin 4 rad/s approaching 7 m -> 3 m": 11.2,
+      "variable spin 0.5..4.5 rad/s at 6 m": 12.6,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 15.966666666666667,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 12.566666666666666
+    },
+    "tracking": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 95.0,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 95.66666666666667,
+      "fast spin 10 rad/s at 4 m": 95.33333333333333,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 94.0,
+      "spin 4 rad/s approaching 7 m -> 3 m": 94.66666666666667,
+      "variable spin 0.5..4.5 rad/s at 6 m": 95.0,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 95.66666666666667,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 95.66666666666667
+    },
+    "centre_err_cm": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 5.0,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 4.1,
+      "fast spin 10 rad/s at 4 m": 2.7666666666666666,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 8.033333333333333,
+      "spin 4 rad/s approaching 7 m -> 3 m": 6.0,
+      "variable spin 0.5..4.5 rad/s at 6 m": 5.933333333333334,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 5.766666666666667,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 5.633333333333333
+    },
+    "mean_hit": 79.87916666666666,
+    "worst_hit": 17.933333333333334,
+    "mean_tracking": 95.125,
+    "mean_hps": 11.466666666666667,
+    "rate_penalty": 0.0,
+    "score": 59.85708333333333
+  },
+  "tuned": {
+    "hits": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 100.0,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 56.666666666666664,
+      "fast spin 10 rad/s at 4 m": 99.36666666666667,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 28.933333333333334,
+      "spin 4 rad/s approaching 7 m -> 3 m": 98.13333333333333,
+      "variable spin 0.5..4.5 rad/s at 6 m": 97.33333333333333,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 98.26666666666667,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 88.4
+    },
+    "hits_per_sec": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 16.46666666666667,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 6.366666666666667,
+      "fast spin 10 rad/s at 4 m": 15.733333333333334,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 4.066666666666666,
+      "spin 4 rad/s approaching 7 m -> 3 m": 12.233333333333333,
+      "variable spin 0.5..4.5 rad/s at 6 m": 13.433333333333334,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 17.166666666666668,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 15.766666666666666
+    },
+    "tracking": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 95.0,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 95.66666666666667,
+      "fast spin 10 rad/s at 4 m": 95.33333333333333,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 94.0,
+      "spin 4 rad/s approaching 7 m -> 3 m": 94.66666666666667,
+      "variable spin 0.5..4.5 rad/s at 6 m": 95.0,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 95.66666666666667,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 95.66666666666667
+    },
+    "centre_err_cm": {
+      "spin 2.1 rad/s at 5 m (like the videos)": 5.7,
+      "spin 6 rad/s + strafe 0.5 m at 5 m": 4.633333333333334,
+      "fast spin 10 rad/s at 4 m": 3.1666666666666665,
+      "no spin, strafe 0.8 m / 2 s at 6 m": 8.933333333333334,
+      "spin 4 rad/s approaching 7 m -> 3 m": 6.833333333333333,
+      "variable spin 0.5..4.5 rad/s at 6 m": 6.933333333333334,
+      "swing back and forth (+-3 rad/s, 4 s) at 6 m": 6.933333333333334,
+      "spin 3 rad/s + gentle strafe 0.3 m / 3 s at 6 m": 6.633333333333333
+    },
+    "mean_hit": 83.3875,
+    "worst_hit": 28.933333333333334,
+    "mean_tracking": 95.125,
+    "mean_hps": 12.654166666666667,
+    "rate_penalty": 0.0,
+    "score": 66.36208333333333
+  },
+  "overrides": {
+    "q_xyz": 16.91117838404923,
+    "q_yaw": 19.383830286818323,
+    "q_adapt_max": 12.506649396360956,
+    "nis_alpha": 0.31989859084512406,
+    "r_yaw": 0.025784395229477834,
+    "max_fire_facing": 27.594841396964767,
+    "side_angle": 16.76572407740986,
+    "center_mode_omega": 14.048299415786328
+  },
+  "score": 66.36208333333333,
+  "trace": [
+    {
+      "iter": 1,
+      "score": 63.34849548440066,
+      "mean_hit": 80.64583333333333,
+      "worst_hit": 27.066666666666666,
+      "mean_hps": 9.283333333333333
+    },
+    {
+      "iter": 2,
+      "score": 64.7599771062271,
+      "mean_hit": 83.08749999999999,
+      "worst_hit": 26.466666666666665,
+      "mean_hps": 12.266666666666667
+    },
+    {
+      "iter": 3,
+      "score": 65.01041666666667,
+      "mean_hit": 81.77916666666667,
+      "worst_hit": 27.96666666666667,
+      "mean_hps": 11.495833333333334
+    },
+    {
+      "iter": 4,
+      "score": 65.23124999999999,
+      "mean_hit": 82.925,
+      "worst_hit": 26.8,
+      "mean_hps": 13.279166666666667
+    },
+    {
+      "iter": 5,
+      "score": 66.36208333333333,
+      "mean_hit": 83.3875,
+      "worst_hit": 28.933333333333334,
+      "mean_hps": 12.654166666666667
+    },
+    {
+      "iter": 6,
+      "score": 66.05541666666667,
+      "mean_hit": 83.1875,
+      "worst_hit": 28.46666666666667,
+      "mean_hps": 12.466666666666667
+    },
+    {
+      "iter": 7,
+      "score": 65.92875000000001,
+      "mean_hit": 83.02083333333334,
+      "worst_hit": 28.4,
+      "mean_hps": 12.879166666666666
+    },
+    {
+      "iter": 8,
+      "score": 66.26291666666667,
+      "mean_hit": 83.2,
+      "worst_hit": 28.966666666666665,
+      "mean_hps": 12.729166666666666
+    }
+  ],
+  "evaluations": 64
+}

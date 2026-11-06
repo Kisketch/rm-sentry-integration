@@ -1,0 +1,68 @@
+// Sentry vision façade: the new autoaim core plus the sentry-specific pieces
+// (gimbal attitude / camera extrinsic, multi-target policy, outpost model).
+// Everything below this class is independent of the transport (video, HikRobot,
+// serial); the app or the robot node only feeds frames and reads AimCommand.
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "autoaim/aimer.hpp"
+#include "autoaim/ballistics.hpp"
+#include "autoaim/config.hpp"
+#include "autoaim/detector.hpp"
+#include "autoaim/pose.hpp"
+#include "autoaim/target.hpp"
+#include "autoaim/tracker.hpp"
+#include "autoaim/types.hpp"
+
+namespace sentry {
+
+struct SentryOutput {
+    autoaim::FrameObservations observations;
+    std::vector<autoaim::TargetState> targets;
+    int selected = -1;
+    autoaim::AimCommand command;
+};
+
+class SentryVision {
+public:
+    explicit SentryVision(const autoaim::Config& cfg);
+
+    // One frame.  `gimbal_*` is the IMU/serial attitude at the exposure time
+    // (world = gimbal-centred, gravity aligned).  Pass zeros for fixed-camera
+    // offline video.
+    SentryOutput process(const cv::Mat& bgr, double stamp, double gimbal_yaw = 0.0,
+                         double gimbal_pitch = 0.0, double gimbal_roll = 0.0);
+
+    void setEnemyColor(autoaim::Color c) { detector_.setEnemyColor(c); }
+    void reset() { manager_.reset(); }
+    const autoaim::Config& config() const { return cfg_; }
+    autoaim::Config& mutableConfig() { return cfg_; }
+    const autoaim::CameraModel& camera() const { return camera_; }
+    const autoaim::Detector& detector() const { return detector_; }
+
+private:
+    autoaim::Config cfg_;
+    autoaim::Detector detector_;
+    autoaim::CameraModel camera_;
+    autoaim::PoseSolver pose_;
+    autoaim::Ballistics ballistics_;
+    autoaim::TargetManager manager_;
+    autoaim::RobotAimer aimer_;
+};
+
+// Pack the command into the old sentry 21-byte frame (AA BB ... BB) so a
+// deployment can reuse the existing MCU protocol.  yaw/pitch are in radians,
+// the protocol carries 1e-4 degrees, exactly like the old AutoArmor::Transmit.
+struct SerialCommand {
+    int32_t yaw = 0;
+    int32_t pitch = 0;
+    int32_t yaw_vel = 0;
+    uint8_t found = 0;
+    uint8_t fire = 0;
+};
+SerialCommand toSerial(const autoaim::AimCommand& cmd, double compensate_yaw_deg = 0.0,
+                       double compensate_pitch_deg = 0.0, double yaw_vel_rad = 0.0);
+
+}  // namespace sentry

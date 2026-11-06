@@ -1,0 +1,9 @@
+build/
+runs/
+*.o
+*.a
+*.so
+*.avi
+*.mp4
+*.png
+!docs/**/*.png
