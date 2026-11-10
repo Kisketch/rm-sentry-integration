@@ -26,7 +26,10 @@ bool Ballistics::simulate(double pitch, double s_target, double& height, double&
         double x, z, vx, vz;
     };
     auto deriv = [&](const S& s) {
-        const double v = std::hypot(s.vx, s.vz);
+        // sqrt(x^2+z^2), not hypot: same value to ~1 ulp for our speed range,
+        // and this runs 4x per RK4 step in the hottest loop of the aimer
+        // (synced with rm-autoaim).
+        const double v = std::sqrt(s.vx * s.vx + s.vz * s.vz);
         return S{s.vx, s.vz, -k * v * s.vx, -g - k * v * s.vz};
     };
     // RK4 with a 10 ms step and a cubic-Hermite crossing.  The old 1 ms step
@@ -87,7 +90,14 @@ BallisticSolution Ballistics::solve(double s, double h) const {
     // last two evaluations, which converges in 2-3 simulations instead of the
     // fixed point's linear rate.  Falls back to the fixed-point step whenever
     // the secant slope is degenerate.  Same 0.5 mm acceptance as before.
-    double aim_h = h, prev_aim = 0, prev_f = 0;
+    // Warm start from the vacuum drop compensation (synced with rm-autoaim):
+    // one simulation fewer on average; same converged answer within 0.5 mm.
+    double aim_h = h;
+    if (cfg_.bullet_speed > 0) {
+        const double tv = s / cfg_.bullet_speed;
+        aim_h += 0.5 * cfg_.gravity * tv * tv;
+    }
+    double prev_aim = 0, prev_f = 0;
     bool have_prev = false;
     for (int i = 0; i < 30; ++i) {
         const double pitch = std::atan2(aim_h, s);
