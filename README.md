@@ -128,9 +128,10 @@ rotated to the front 0.35 s later.*
 
 ## Baseline snapshot
 
-Every number in this README is frozen in [`BASELINE.md`](BASELINE.md), together with the exact
+Every number in this README is frozen in [`BASELINE.md`](https://github.com/Kisketch/rm-autoaim/blob/main/BASELINE.md)
+(in the main rm-autoaim repository — see the note at the top of this file), together with the exact
 environment (OS / MSVC / OpenCV / commit), the commands to reproduce it, and the raw outputs in
-[`reports/`](reports/). Regression thresholds live in the same file.
+[`reports/`](https://github.com/Kisketch/rm-autoaim/tree/main/reports). Regression thresholds live in the same file.
 
 > Measured: the two-video evaluation is bit-for-bit reproducible (3.avi 62.5%, 4.avi 59.6%);
 > the simulator drifts by up to 3 percentage points across OS/OpenCV versions, so compare it only
@@ -471,7 +472,7 @@ noise problem. (`tools/robustness_sweep.json`)
 ## Regression gate
 
 `python3 tools/regression.py` re-runs both videos (detection cache is reused) and
-the simulator, compares against the frozen numbers in `BASELINE.md` §10 and exits
+the simulator, compares against the frozen numbers in the rm-autoaim `BASELINE.md` §10 and exits
 non-zero on a regression. CI cannot run it because the videos are not in the
 repository, so it is the manual gate before a merge:
 

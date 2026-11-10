@@ -492,6 +492,25 @@ void testPoseBufferExtrapolation() {
     CHECK(autoaim::quatAngleBetween(q, quatFromYawPitchRoll(0.025, 0.1, 0.0)) < 1e-6);
 }
 
+void testPoseBufferNonFinite() {
+    // A corrupt serial frame can decode to NaN floats; such samples must be
+    // dropped at push(), never stored (full-audit 2026-11 finding).
+    using autoaim::quatFromYawPitchRoll;
+    autoaim::PoseBuffer buf(64, 0.05, 0.010);
+    const double nan = std::nan("");
+    buf.push({0.000, quatFromYawPitchRoll(0.0, 0, 0)});
+    buf.push({0.005, quatFromYawPitchRoll(0.01, 0, 0)});
+    buf.push({nan, quatFromYawPitchRoll(0.02, 0, 0)});
+    buf.push({0.010, {nan, 0, 0, 0}});
+    buf.push({0.010, quatFromYawPitchRoll(0.02, 0, 0)});
+    CHECK(buf.size() == 3);
+    autoaim::Quat q;
+    CHECK(buf.query(0.0075, q));
+    CHECK(std::isfinite(q[0]) && std::isfinite(q[1]) && std::isfinite(q[2]) && std::isfinite(q[3]));
+    CHECK(buf.query(0.012, q));
+    CHECK(std::isfinite(q[0]));
+}
+
 void testMergeWindows() {
     // Four overlapping slot windows of one robot + one far window.
     std::vector<cv::Rect> w{{100, 100, 80, 60}, {150, 110, 80, 60}, {210, 100, 80, 60},
@@ -611,6 +630,7 @@ int main() {
     testAimerOffsets();
     testBallistics();
     testPoseBufferExtrapolation();
+    testPoseBufferNonFinite();
     testMergeWindows();
     testConfigValidation();
     testDelayCalibration();

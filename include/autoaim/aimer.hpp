@@ -64,7 +64,7 @@ public:
 private:
     int selectArmor(const TargetState& target, double t, int previous, double& facing) const;
     AimerConfig cfg_;
-    const Ballistics& ball_;
+    Ballistics ball_;  // by value: a reference member dangles if the caller passes a temporary
     mutable int last_armor_ = -1;  // plate chosen last frame, for switch hysteresis
     mutable std::string last_id_;  // tracker id the hysteresis state belongs to
 };
@@ -76,7 +76,7 @@ public:
 
 private:
     AimerConfig cfg_;
-    const Ballistics& ball_;
+    Ballistics ball_;  // by value: a reference member dangles if the caller passes a temporary
 };
 
 class DirectAimer {
@@ -86,7 +86,7 @@ public:
 
 private:
     AimerConfig cfg_;
-    const Ballistics& ball_;
+    Ballistics ball_;  // by value: a reference member dangles if the caller passes a temporary
 };
 
 }  // namespace autoaim
