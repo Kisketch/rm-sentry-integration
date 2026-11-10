@@ -37,9 +37,10 @@ public:
 
     void setEnemyColor(autoaim::Color c) { detector_.setEnemyColor(c); }
     // Tracking-guided windowed detection (docs/roi_detection.md): search
-    // only around the previous frame's solved armors, with a full scan
-    // every 30 frames and an immediate full-frame retry when a windowed
-    // frame finds nothing. Off by default.
+    // only around every active track's predicted plate positions (all
+    // plate slots, projected at the current frame's attitude, 60 px
+    // margin), with a full scan every 30 frames and an immediate
+    // full-frame retry when a windowed frame finds nothing. Off by default.
     void setRoiEnabled(bool on) { roi_enabled_ = on; }
     void reset() { manager_.reset(); }
     const autoaim::Config& config() const { return cfg_; }

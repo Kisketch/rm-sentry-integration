@@ -23,6 +23,41 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
     out.observations.frame = static_cast<int>(std::lround(stamp * cfg_.eval.fps));
     out.observations.stamp = stamp;
 
+    // Tracking-guided windows: build BEFORE detecting, from every active
+    // track's PREDICTED plate positions at this stamp (all plate slots of
+    // each tracked robot, not just the ones seen last frame), projected
+    // with this frame's gimbal attitude. A plate rotating into view is
+    // therefore inside a window the first frame it appears. Margin 60 px:
+    // on the regression videos this beat both the previous observation-
+    // based windows (misses 49 -> 3 on the slow-spin clip at equal end-to-
+    // end hit rate) and a 110 px margin (bigger windows clip more light
+    // bars at window borders and feed duplicate lights back to the
+    // tracker); see docs/roi_detection.md.
+    roi_windows_.clear();
+    if (roi_enabled_) {
+        constexpr int kMargin = 60;
+        const cv::Rect frame_rect(0, 0, bgr.cols, bgr.rows);
+        for (const auto& s : manager_.snapshots(stamp)) {
+            if (!s.valid || !s.active()) continue;
+            for (int k = 0; k < s.armors_num; ++k) {
+                const ArmorState a = s.armorAt(k, stamp);
+                if (a.position[0] < 0.5) continue;  // behind the gimbal plane
+                const auto corners = armorCorners(a.position, a.yaw,
+                                                  cfg_.pose.armor_pitch_deg * kPi / 180.0, s.type);
+                double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+                for (const auto& c : corners) {
+                    const cv::Point2d px = camera_.project(c);
+                    x0 = std::min(x0, px.x), y0 = std::min(y0, px.y);
+                    x1 = std::max(x1, px.x), y1 = std::max(y1, px.y);
+                }
+                cv::Rect w(cvRound(x0) - kMargin, cvRound(y0) - kMargin,
+                           cvRound(x1 - x0) + 2 * kMargin, cvRound(y1 - y0) + 2 * kMargin);
+                w &= frame_rect;
+                if (w.width >= 8 && w.height >= 8) roi_windows_.push_back(w);
+            }
+        }
+    }
+
     std::vector<ArmorDetection> detections;
     if (roi_enabled_ && !roi_windows_.empty() && frames_since_full_ < 30) {
         detections = detector_.detect(bgr, roi_windows_);
@@ -36,25 +71,6 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
         frames_since_full_ = 0;
     }
     out.observations.armors = pose_.solveAll(detections);
-
-    // Rebuild next frame's windows from this frame's solved armors,
-    // projected with the current gimbal attitude, plus a safety margin.
-    roi_windows_.clear();
-    if (roi_enabled_) {
-        constexpr int kMargin = 110;
-        for (const auto& o : out.observations.armors) {
-            const auto corners = armorCorners(o.position, o.yaw,
-                                              cfg_.pose.armor_pitch_deg * kPi / 180.0, o.det.type);
-            double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-            for (const auto& c : corners) {
-                const cv::Point2d px = camera_.project(c);
-                x0 = std::min(x0, px.x), y0 = std::min(y0, px.y);
-                x1 = std::max(x1, px.x), y1 = std::max(y1, px.y);
-            }
-            roi_windows_.emplace_back(cvRound(x0) - kMargin, cvRound(y0) - kMargin,
-                                      cvRound(x1 - x0) + 2 * kMargin, cvRound(y1 - y0) + 2 * kMargin);
-        }
-    }
 
     manager_.update(out.observations);
     out.targets = manager_.snapshots(stamp);
