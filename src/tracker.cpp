@@ -79,6 +79,12 @@ RobotTracker::Vec RobotTracker::predict(double t) const {
         x[XC] += x[VXC] * b;
         x[YC] += x[VYC] * b;
         x[ZC] += x[VZC] * b;
+        // The velocity decays too (same F as transition()).  Without this the
+        // extrapolated state carried the undamped velocity, so a TargetState
+        // taken at t > stamp_ and extrapolated again overshot by v*(1-a)*b.
+        x[VXC] *= a;
+        x[VYC] *= a;
+        x[VZC] *= a;
     } else {
         x[XC] += x[VXC] * dt;
         x[YC] += x[VYC] * dt;
@@ -357,7 +363,10 @@ ArmorState TargetState::armorAt(int k, double t) const {
     const double phi = wrapAngle(a.yaw + omega * dt);
     ArmorState out = a;
     const cv::Vec3d c = centerAt(t);
-    out.position = {c[0] - a.radius * std::cos(phi), c[1] - a.radius * std::sin(phi), a.position[2]};
+    // Plate height follows the centre's vertical motion (it used to stay at the
+    // snapshot height while centerAt() moved).
+    out.position = {c[0] - a.radius * std::cos(phi), c[1] - a.radius * std::sin(phi),
+                    a.position[2] + (c[2] - center[2])};
     out.yaw = phi;
     return out;
 }
@@ -415,6 +424,8 @@ OutpostTracker::Vec OutpostTracker::predict(double t) const {
         const double b = cfg_.singer_tau * (1.0 - a);
         x[XC] += x[VXC] * b;
         x[YC] += x[VYC] * b;
+        x[VXC] *= a;
+        x[VYC] *= a;
     } else {
         x[XC] += x[VXC] * dt;
         x[YC] += x[VYC] * dt;

@@ -19,6 +19,7 @@ add_library(autoaim_core STATIC
     src/ballistics.cpp
     src/aimer.cpp
     src/sentry.cpp
+    src/roi.cpp
     src/serial_protocol.cpp
     src/evaluation.cpp
     src/draw.cpp)

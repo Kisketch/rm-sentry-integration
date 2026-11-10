@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -43,13 +44,23 @@ void yawPitchRollFromMat(const cv::Matx33d& R, double& yaw, double& pitch, doubl
 }  // namespace
 
 SerialPort::SerialPort(std::string device, int baud, double stamp_delay_s, double max_gap_s,
-                       bool require_crc)
+                       bool require_crc, double max_extrap_s)
     : device_(std::move(device)),
       baud_(baud),
       stamp_delay_s_(stamp_delay_s),
-      poses_(512, max_gap_s),
+      poses_(512, max_gap_s, max_extrap_s),
       require_crc_(require_crc) {
-    if (openDevice()) thread_ = std::thread(&SerialPort::readerLoop, this);
+    if (baudToSpeed(baud_) == B115200 && baud_ != 115200)
+        std::cerr << "SerialPort: unsupported baud " << baud_ << ", using 115200\n";
+    bool opened;
+    {
+        std::lock_guard<std::mutex> lock(fd_mutex_);
+        opened = openDevice();
+    }
+    // The reader owns reconnection, so it runs even if the first open failed
+    // (device plugged in later).
+    (void)opened;
+    thread_ = std::thread(&SerialPort::readerLoop, this);
 }
 
 SerialPort::~SerialPort() {
@@ -59,12 +70,11 @@ SerialPort::~SerialPort() {
 }
 
 bool SerialPort::openDevice() {
-    fd_ = ::open(device_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd_ < 0) return false;
+    const int fd = ::open(device_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return false;
     termios tio{};
-    if (tcgetattr(fd_, &tio) < 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (tcgetattr(fd, &tio) < 0) {
+        ::close(fd);
         return false;
     }
     cfsetispeed(&tio, baudToSpeed(baud_));
@@ -76,45 +86,87 @@ bool SerialPort::openDevice() {
 #ifdef CRTSCTS
     tio.c_cflag &= ~CRTSCTS;
 #endif
-    tio.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
-    tio.c_iflag &= ~(IXON | IXOFF | IXANY);
+    // Fully raw (cfmakeraw equivalent).  The old setup left ICRNL/ISTRIP etc.
+    // at the driver default: with ICRNL on, every 0x0D byte of the binary
+    // attitude stream arrived as 0x0A, silently corrupting angles.
+    tio.c_lflag &= ~(ICANON | ECHO | ECHOE | ECHONL | ISIG | IEXTEN);
+    tio.c_iflag &= ~(IXON | IXOFF | IXANY | ICRNL | INLCR | IGNCR | ISTRIP | BRKINT | PARMRK | INPCK);
     tio.c_oflag &= ~OPOST;
     tio.c_cc[VMIN] = 0;
     tio.c_cc[VTIME] = 0;
-    tcsetattr(fd_, TCSANOW, &tio);
-    tcflush(fd_, TCIOFLUSH);
+    if (tcsetattr(fd, TCSANOW, &tio) < 0) {
+        ::close(fd);
+        return false;
+    }
+    tcflush(fd, TCIOFLUSH);
+    fd_ = fd;
     return true;
 }
 
+void SerialPort::closeLocked() {
+    const int fd = fd_.exchange(-1);
+    if (fd >= 0) ::close(fd);
+}
+
 void SerialPort::close() {
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
-    }
+    std::lock_guard<std::mutex> lock(fd_mutex_);
+    closeLocked();
 }
 
 void SerialPort::reconnect() {
-    close();
+    {
+        std::lock_guard<std::mutex> lock(fd_mutex_);
+        closeLocked();
+    }
+    reconnect_requested_ = false;
+    ++reconnects_;
     for (int i = 0; i < 20 && !quit_; ++i) {
-        if (openDevice()) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        {
+            std::lock_guard<std::mutex> lock(fd_mutex_);
+            if (openDevice()) return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));  // lock not held
     }
 }
 
 void SerialPort::readerLoop() {
-    std::array<uint8_t, 128> buf{};
+    std::array<uint8_t, 256> buf{};
     std::size_t used = 0;
+    const double byte_time = 10.0 / std::max(1, baud_);  // 8N1: 10 bits per byte
     while (!quit_) {
-        if (fd_ < 0) {
+        if (fd_.load() < 0 || reconnect_requested_) {
             reconnect();
+            used = 0;
             continue;
         }
-        pollfd pfd{fd_, POLLIN, 0};
+        // Only this thread closes fd_, so the value stays valid for this
+        // iteration even while send() writes to it.
+        const int fd = fd_.load();
+        pollfd pfd{fd, POLLIN, 0};
         const int pr = poll(&pfd, 1, 20);
-        if (pr <= 0) continue;
-        const ssize_t n = ::read(fd_, buf.data() + used, buf.size() - used);
-        if (n <= 0) {
+        if (pr < 0) {
+            if (errno == EINTR) continue;
             reconnect();
+            used = 0;
+            continue;
+        }
+        if (pr == 0) continue;
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {  // unplugged / closed
+            reconnect();
+            used = 0;
+            continue;
+        }
+        const ssize_t n = ::read(fd, buf.data() + used, buf.size() - used);
+        const double t_read = nowSeconds();
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+            reconnect();
+            used = 0;
+            continue;
+        }
+        if (n == 0) {  // POLLIN with no data on a tty = hang-up
+            reconnect();
+            used = 0;
             continue;
         }
         used += static_cast<std::size_t>(n);
@@ -132,9 +184,11 @@ void SerialPort::readerLoop() {
             if (!parsed && require_crc_) ++crc_failures_;
             if (parsed) {
                 // The protocol carries no MCU timestamp: stamp on receipt,
-                // minus the estimated sample->receipt lag.  The quaternion
-                // uses the setGimbalAttitude convention (Ry angle = -pitch).
-                a.stamp = nowSeconds() - stamp_delay_s_;
+                // back-dated by the bytes that arrived after this frame, minus
+                // the estimated sample->receipt lag.  The quaternion uses the
+                // setGimbalAttitude convention (Ry angle = -pitch).
+                const std::size_t after = used - (consumed + sentry::kAttitudeSize);
+                a.stamp = t_read - static_cast<double>(after) * byte_time - stamp_delay_s_;
                 poses_.push({a.stamp, autoaim::quatFromYawPitchRoll(a.yaw, -a.pitch, a.roll)});
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -151,21 +205,32 @@ void SerialPort::readerLoop() {
             std::memmove(buf.data(), buf.data() + consumed, used - consumed);
             used -= consumed;
         }
-        if (used == buf.size()) used = 0;
+        if (used == buf.size()) used = 0;  // unreachable: < 17 bytes stay after parsing
     }
 }
 
 bool SerialPort::send(const std::array<uint8_t, sentry::kControlSize>& frame) {
-    if (fd_ < 0) {
-        reconnect();
-        if (fd_ < 0) return false;
-    }
-    const ssize_t n = ::write(fd_, frame.data(), frame.size());
-    if (n != static_cast<ssize_t>(frame.size())) {
-        reconnect();
+    std::lock_guard<std::mutex> lock(fd_mutex_);
+    const int fd = fd_.load();
+    if (fd < 0) return false;  // the reader thread is reconnecting
+    std::size_t off = 0;
+    for (int tries = 0; off < frame.size() && tries < 5; ++tries) {
+        const ssize_t n = ::write(fd, frame.data() + off, frame.size() - off);
+        if (n > 0) {
+            off += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            // TX queue full on a non-blocking port: wait briefly, do not
+            // treat back-pressure as a disconnect (the old code reconnected).
+            pollfd pfd{fd, POLLOUT, 0};
+            poll(&pfd, 1, 1);
+            continue;
+        }
+        reconnect_requested_ = true;
         return false;
     }
-    return true;
+    return off == frame.size();
 }
 
 bool SerialPort::query(double stamp, sentry::AttitudeFrame& out) {

@@ -1,4 +1,4 @@
-// Multi-target manager: keeps one tracker per plausible robot and chooses the
+// Multi-target manager: keeps one tracker per robot identity and chooses the
 // aim target explicitly.  The old sentry code kept a single Aim object and
 // re-initialised it whenever the first plate under 7 m changed; this keeps the
 // history of every target, so switching back does not restart the filter.
@@ -19,8 +19,9 @@ public:
     TargetManager(const TrackerConfig& tracker_cfg, const TargetConfig& target_cfg,
                   const CameraModel& camera);
 
-    // Associate the frame's observations, update every track (including the
-    // ones that were not seen this frame), and drop stale tracks.
+    // Route the frame's observations to one track per identity (deviceId, or
+    // the outpost singleton), update every track (including the ones that
+    // were not seen this frame), and drop stale tracks.
     void update(const FrameObservations& frame);
 
     // Snapshots of all active tracks, extrapolated to time t.
@@ -48,7 +49,8 @@ private:
         void reset();
     };
 
-    int matchEntry(const ArmorObservation& obs, double stamp) const;
+    int priorityOf(const std::string& label) const;
+    bool eligible(const TargetState& s) const;
 
     TrackerConfig tracker_cfg_;
     TargetConfig target_cfg_;

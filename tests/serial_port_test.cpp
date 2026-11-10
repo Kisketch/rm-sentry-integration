@@ -116,6 +116,43 @@ int main() {
 
     ::close(master);
     ::close(slave);
+
+    // Raw-mode regression: a payload byte 0x0D must arrive unchanged.  The old
+    // termios setup left ICRNL on, so 0x0D became 0x0A (6.8877 deg read back
+    // as 6.8106 deg).  Three frames written in ONE burst must also all be
+    // parsed, each with its own (back-dated) stamp.
+    {
+        int m2 = -1, s2 = -1;
+        char name2[128] = {0};
+        if (openpty(&m2, &s2, name2, nullptr, nullptr) == 0) {
+            io::SerialPort port2(name2, 115200, 0.0, /*max_gap_s=*/0.25, false, /*max_extrap_s=*/0.5);
+            CHECK(port2.ok(), "second port opened");
+            const double yaw_deg = 68877 / 10000.0;  // raw 0x00010D0D
+            const double yaw = yaw_deg * 3.14159265358979323846 / 180.0;
+            std::array<uint8_t, 3 * sentry::kAttitudeSize> burst{};
+            for (int k = 0; k < 3; ++k) {
+                uint8_t* b = burst.data() + k * sentry::kAttitudeSize;
+                b[0] = 0xAA, b[1] = 0xBB;
+                writeI32(b + 3, 68877);
+                writeI32(b + 7, encodeAngle(0.1));
+                writeI32(b + 11, encodeAngle(0.2 + 3.14159265358979323846));
+                b[15] = 0, b[16] = 1;
+            }
+            const ssize_t n = ::write(m2, burst.data(), burst.size());
+            CHECK(n == static_cast<ssize_t>(burst.size()), "burst write");
+            sleepMs(150);
+            CHECK(port2.receivedFrames() == 3, "burst frames parsed: %llu",
+                  static_cast<unsigned long long>(port2.receivedFrames()));
+            CHECK(port2.samplesBuffered() == 3, "distinct stamps per burst frame: %zu", port2.samplesBuffered());
+            sentry::AttitudeFrame o2;
+            const bool q2 = port2.query(nowSeconds() - 0.1, o2);
+            CHECK(q2, "query near the burst (extrapolation enabled)");
+            CHECK(q2 && std::abs(o2.yaw - yaw) < 2e-5, "0x0D bytes survive: yaw %.6f deg (want %.4f)",
+                  o2.yaw * 180.0 / 3.14159265358979323846, yaw_deg);
+            ::close(m2);
+            ::close(s2);
+        }
+    }
     if (!failures) std::printf("SERIAL PORT TESTS PASSED\n");
     return failures ? 1 : 0;
 }

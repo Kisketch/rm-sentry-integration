@@ -15,7 +15,20 @@
 // bracketing gap exceeds `max_gap_s` (serial dropout).  That is deliberate:
 // the previous implementation clamped to the newest sample however stale it
 // was, which silently fed the vision core a wrong attitude.  Callers must
-// treat false as "no attitude for this frame".
+// treat false as "no attitude for this frame".  `max_extrap_s` allows a
+// short constant-rate extrapolation past the newest sample: a camera frame
+// stamped at receipt is usually a few ms newer than the last attitude frame
+// that has arrived, so without it a live robot would skip every frame.
+//
+// Threading: the reader thread is the only owner of the descriptor's
+// lifetime (open / close / reconnect).  send() writes under the same mutex
+// and, on a hard error, only *requests* a reconnect.  The old version let
+// both threads close and reopen fd_ concurrently - a double close could hit
+// a descriptor number the OS had already reused (e.g. the camera).
+//
+// Frame stamps: several frames can arrive in one read(); each is back-dated
+// by the wire time of the bytes received after it (10 bits per byte), so
+// consecutive samples keep their true spacing instead of sharing one stamp.
 #pragma once
 
 #include <array>
@@ -37,16 +50,18 @@ public:
     // out.  Only enable once the MCU firmware fills byte 2 (see
     // serial_protocol.hpp); the legacy sender leaves it 0.
     SerialPort(std::string device, int baud = 115200, double stamp_delay_s = 0.0015,
-               double max_gap_s = 0.05, bool require_crc = false);
+               double max_gap_s = 0.05, bool require_crc = false, double max_extrap_s = 0.0);
     ~SerialPort();
 
     SerialPort(const SerialPort&) = delete;
     SerialPort& operator=(const SerialPort&) = delete;
 
-    bool ok() const { return fd_ >= 0; }
+    bool ok() const { return fd_.load() >= 0; }
     void close();
 
-    // Blocking write of a 21-byte frame.  Reconnects once on failure.
+    // Write one 21-byte frame (waits up to ~5 ms for the TX queue on a full
+    // non-blocking port).  On a hard error it returns false and asks the
+    // reader thread to reconnect; it never reopens the device itself.
     bool send(const std::array<uint8_t, sentry::kControlSize>& frame);
 
     // Attitude interpolated (SLERP) at `stamp` (seconds, steady clock).
@@ -57,16 +72,20 @@ public:
     std::uint64_t receivedFrames() const { return received_.load(); }
     std::uint64_t failedQueries() const { return failed_queries_.load(); }
     std::uint64_t crcFailures() const { return crc_failures_.load(); }
+    std::uint64_t reconnects() const { return reconnects_.load(); }
     std::size_t samplesBuffered() const { return poses_.size(); }
 
 private:
-    bool openDevice();
+    bool openDevice();  // caller holds fd_mutex_
+    void closeLocked();  // caller holds fd_mutex_
     void readerLoop();
-    void reconnect();
+    void reconnect();    // reader thread only
 
     std::string device_;
     int baud_;
-    int fd_ = -1;
+    std::atomic<int> fd_{-1};
+    std::mutex fd_mutex_;  // guards open/close against concurrent write()
+    std::atomic<bool> reconnect_requested_{false};
     std::atomic<bool> quit_{false};
     std::thread thread_;
 
@@ -86,6 +105,7 @@ private:
     std::atomic<std::uint64_t> received_{0};
     std::atomic<std::uint64_t> failed_queries_{0};
     std::atomic<std::uint64_t> crc_failures_{0};
+    std::atomic<std::uint64_t> reconnects_{0};
     bool require_crc_ = false;
 };
 

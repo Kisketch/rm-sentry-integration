@@ -20,7 +20,7 @@ namespace {
 
 void usage() {
     std::cout << "usage: sentry_offline <video> [--config f.yaml] [--out dir] [--render]\n"
-                 "                     [--start N] [--max-frames N] [--color red|blue]\n";
+                 "                     [--start N] [--max-frames N] [--color red|blue] [--roi]\n";
 }
 
 }  // namespace
@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
     int start_frame = 0;
     int max_frames = -1;
     std::string color = "red";
+    bool roi = false;
 
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -46,6 +47,7 @@ int main(int argc, char** argv) {
         else if (a == "--start" && i + 1 < argc) start_frame = std::stoi(argv[++i]);
         else if (a == "--max-frames" && i + 1 < argc) max_frames = std::stoi(argv[++i]);
         else if (a == "--color" && i + 1 < argc) color = argv[++i];
+        else if (a == "--roi") roi = true;  // tracking-guided windowed detection
         else {
             std::cerr << "unknown argument: " << a << "\n";
             usage();
@@ -63,6 +65,7 @@ int main(int argc, char** argv) {
     if (color == "blue") cfg.detector.enemy_color = autoaim::Color::BLUE;
 
     sentry::SentryVision vision(cfg);
+    vision.setRoiEnabled(roi);
 
     cv::VideoCapture cap(video);
     if (!cap.isOpened()) {
