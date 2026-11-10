@@ -41,6 +41,12 @@ public:
 private:
     cv::Matx33d K_;
     cv::Mat dist_;
+    // Cached intrinsics + distortion for the allocation-free projection fast
+    // path (<= 5 distortion coefficients; longer models fall back to
+    // cv::projectPoints). Numerically identical for the 5-coefficient model.
+    double fx_ = 0, fy_ = 0, cx_ = 0, cy_ = 0;
+    double dc_[5] = {0, 0, 0, 0, 0};
+    bool fast_projection_ = false;
     cv::Matx33d R_cg_ = cv::Matx33d::eye();
     cv::Vec3d t_cg_{0, 0, 0};
     cv::Matx33d R_wg_ = cv::Matx33d::eye();

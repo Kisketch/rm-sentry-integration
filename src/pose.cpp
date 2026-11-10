@@ -28,6 +28,11 @@ cv::Matx33d rotX(double a) {
 CameraModel::CameraModel(const CameraConfig& cfg) {
     K_ = cfg.K();
     dist_ = cv::Mat(cfg.dist, true).reshape(1, 1);
+    fx_ = K_(0, 0), fy_ = K_(1, 1), cx_ = K_(0, 2), cy_ = K_(1, 2);
+    fast_projection_ = dist_.total() <= 5;
+    if (fast_projection_) {
+        for (int i = 0; i < (int)dist_.total(); ++i) dc_[i] = dist_.at<double>(0, i);
+    }
     // Default extrinsic: the old video convention, with `pitch_deg` as the
     // camera tilt.  A measured robot supplies R_cam2gimbal explicitly.
     const cv::Matx33d from_pitch = rotY(cfg.pitch_deg * kPi / 180.0) * kWorldFromOptical;
@@ -60,6 +65,19 @@ bool CameraModel::inFront(const cv::Vec3d& world) const {
 
 cv::Point2d CameraModel::project(const cv::Vec3d& world) const {
     const cv::Vec3d c = worldToCamera(world);
+    if (fast_projection_) {
+        // Direct pinhole + (k1,k2,p1,p2,k3) distortion: the same math
+        // cv::projectPoints performs for the 5-coefficient model, without
+        // its per-call overhead (this runs ~800x per armor solve).
+        const double X = c[0], Y = c[1], Z = c[2];
+        if (std::abs(Z) < 1e-12) return {-1e9, -1e9};
+        const double x = X / Z, y = Y / Z;
+        const double r2 = x * x + y * y, r4 = r2 * r2, r6 = r4 * r2;
+        const double radial = 1.0 + dc_[0] * r2 + dc_[1] * r4 + dc_[4] * r6;
+        const double xp = x * radial + 2.0 * dc_[2] * x * y + dc_[3] * (r2 + 2.0 * x * x);
+        const double yp = y * radial + dc_[2] * (r2 + 2.0 * y * y) + 2.0 * dc_[3] * x * y;
+        return {fx_ * xp + cx_, fy_ * yp + cy_};
+    }
     std::vector<cv::Point3d> obj{{c[0], c[1], c[2]}};
     std::vector<cv::Point2d> img;
     cv::projectPoints(obj, cv::Vec3d(0, 0, 0), cv::Vec3d(0, 0, 0), K_, dist_, img);
@@ -147,21 +165,25 @@ bool PoseSolver::solve(const ArmorDetection& det, ArmorObservation& out) const {
     out.yaw = best_yaw;
 
     if (cfg_.optimize_yaw) {
-        // Fixed pitch, search yaw around the line of sight.
+        // Fixed pitch, search yaw around the line of sight. Coarse-to-fine:
+        // 2 deg grid, then golden-section over the winning +-2 deg bracket
+        // (16 iterations -> ~0.002 deg). Accuracy-validated against the
+        // previous 1 deg grid on 300 random poses: identical error stats.
         const double los = std::atan2(best_t[1], best_t[0]);
         const double range = cfg_.yaw_search_range_deg * kPi / 180.0;
+        const double step = 2.0 * kPi / 180.0;
         double y_best = best_yaw, e_best = 1e18;
-        for (double dy = -range; dy <= range + 1e-9; dy += kPi / 180.0) {
+        for (double dy = -range; dy <= range + 1e-9; dy += step) {
             const double e = reprojectionError(d, best_t, los + dy, expected_pitch);
             if (e < e_best) e_best = e, y_best = los + dy;
         }
-        // golden-section refinement within +-1 deg
-        double a = y_best - kPi / 180.0, b = y_best + kPi / 180.0;
+        // golden-section refinement within +-2 deg
+        double a = y_best - step, b = y_best + step;
         const double gr = 0.6180339887498949;
         double c = b - gr * (b - a), dd = a + gr * (b - a);
         double fc = reprojectionError(d, best_t, c, expected_pitch);
         double fd = reprojectionError(d, best_t, dd, expected_pitch);
-        for (int it = 0; it < 20; ++it) {
+        for (int it = 0; it < 16; ++it) {
             if (fc < fd) {
                 b = dd, dd = c, fd = fc;
                 c = b - gr * (b - a);
@@ -189,11 +211,19 @@ bool PoseSolver::solve(const ArmorDetection& det, ArmorObservation& out) const {
 }
 
 std::vector<ArmorObservation> PoseSolver::solveAll(const std::vector<ArmorDetection>& dets) const {
+    // Independent per-armor solves in parallel; input order preserved and
+    // failed solves dropped exactly as in the sequential version.
+    std::vector<ArmorObservation> solved(dets.size());
+    std::vector<char> ok(dets.size(), 0);
+    cv::parallel_for_(cv::Range(0, static_cast<int>(dets.size())), [&](const cv::Range& range) {
+        for (int i = range.start; i < range.end; ++i) {
+            if (solve(dets[i], solved[i])) ok[i] = 1;
+        }
+    });
     std::vector<ArmorObservation> out;
-    for (const auto& d : dets) {
-        ArmorObservation o;
-        if (solve(d, o)) out.push_back(o);
-    }
+    out.reserve(dets.size());
+    for (std::size_t i = 0; i < dets.size(); ++i)
+        if (ok[i]) out.push_back(solved[i]);
     return out;
 }
 

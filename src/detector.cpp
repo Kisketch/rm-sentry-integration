@@ -120,14 +120,34 @@ Detector::Detector(const DetectorConfig& cfg)
       classifier_(cfg.model_path, cfg.label_path, cfg.classify_threshold, cfg.ignore_classes) {}
 
 std::vector<Light> Detector::findLights(const cv::Mat& bgr, cv::Mat& mask) const {
-    std::vector<cv::Mat> ch;
-    cv::split(bgr, ch);
-    cv::Mat diff;
-    if (cfg_.enemy_color == Color::RED)
-        cv::subtract(ch[2], ch[0], diff);
-    else
-        cv::subtract(ch[0], ch[2], diff);
-    cv::threshold(diff, mask, cfg_.channel_diff_threshold, 255, cv::THRESH_BINARY);
+    if (bgr.type() == CV_8UC3) {
+        // Fused single pass replacing split + subtract + threshold.
+        // Bit-exact with the old chain: saturating channel difference,
+        // then mask = diff > thr ? 255 : 0 (THRESH_BINARY semantics).
+        mask.create(bgr.rows, bgr.cols, CV_8UC1);
+        const int hi = cfg_.enemy_color == Color::RED ? 2 : 0;
+        const int lo = 2 - hi;
+        const int t = cfg_.channel_diff_threshold;
+        cv::parallel_for_(cv::Range(0, bgr.rows), [&](const cv::Range& range) {
+            for (int y = range.start; y < range.end; ++y) {
+                const uchar* src = bgr.ptr<uchar>(y);
+                uchar* dst = mask.ptr<uchar>(y);
+                for (int x = 0; x < bgr.cols; ++x) {
+                    const int d = static_cast<int>(src[3 * x + hi]) - src[3 * x + lo];
+                    dst[x] = (d > t) ? 255 : 0;
+                }
+            }
+        });
+    } else {
+        std::vector<cv::Mat> ch;
+        cv::split(bgr, ch);
+        cv::Mat diff;
+        if (cfg_.enemy_color == Color::RED)
+            cv::subtract(ch[2], ch[0], diff);
+        else
+            cv::subtract(ch[0], ch[2], diff);
+        cv::threshold(diff, mask, cfg_.channel_diff_threshold, 255, cv::THRESH_BINARY);
+    }
     const cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT, {3, 3});
     cv::morphologyEx(mask, mask, cv::MORPH_OPEN, k);
     cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, k, {-1, -1}, 2);
