@@ -106,7 +106,10 @@ struct TrackerConfig {
 struct TargetConfig {
     double max_distance = 7.0;      // m, ignore observations beyond this
     double lost_keep_time = 1.0;    // s, keep a LOST track before deleting it
-    double association_gate = 0.6;  // m, observation -> track gate
+    // Legacy: observation -> track spatial gate of the old manager.  Tracks are
+    // now one per identity and the tracker's own Mahalanobis gate decides, so
+    // this is no longer read; kept so existing YAML files still load.
+    double association_gate = 0.6;
     double switch_margin = 0.5;     // m; keep the current target unless another is this much closer
     bool require_tracking = true;   // only aim at TRACKING targets
     // Earlier entries win.  Empty means "closest target".
@@ -142,6 +145,11 @@ struct AimerConfig {
     // Velocity feedforward into the simulated gimbal (0 = pure P lag).
     // Models a real gimbal that also receives the commanded yaw rate.
     double gimbal_ff = 0.0;
+    // Fixed mechanical trim added to every final command (degrees), e.g. the
+    // old Transmit's compensate.  Applied after aiming, so it never changes
+    // the plate choice or the fire decision.  Measure on the robot; default 0.
+    double yaw_offset_deg = 0.0;
+    double pitch_offset_deg = 0.0;
 };
 
 struct EvalConfig {
@@ -159,8 +167,13 @@ struct Config {
     AimerConfig aimer;
     EvalConfig eval;
 
-    // Load from YAML; keys that are missing keep their defaults.
+    // Load from YAML; keys that are missing keep their defaults.  The result
+    // is validated (see validate()); an inconsistent file throws.
     static Config load(const std::string& path);
+    // Sanity checks that would otherwise surface as NaNs, divisions by zero or
+    // silently wrong geometry deep in the pipeline.  Returns one message per
+    // problem; empty means valid.
+    std::vector<std::string> validate() const;
     void save(const std::string& path) const;
 };
 

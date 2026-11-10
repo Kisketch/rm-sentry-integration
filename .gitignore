@@ -7,3 +7,5 @@ runs/
 *.mp4
 *.png
 !docs/**/*.png
+*.bak
+*.bak-*

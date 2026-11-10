@@ -14,6 +14,7 @@
 #include <opencv2/core.hpp>
 
 #include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -146,10 +147,14 @@ struct TargetState {
     ArmorState armorAt(int k, double t) const;
 };
 
+// Wrap to (-pi, pi].  O(1) for any input: the previous while-loop version
+// never terminated for +-inf (a diverged filter state) and took O(|a|)
+// iterations for large values.  Non-finite input is returned unchanged so
+// the caller's isfinite() checks still see it.
 inline double wrapAngle(double a) {
-    while (a > kPi) a -= 2 * kPi;
-    while (a <= -kPi) a += 2 * kPi;
-    return a;
+    if (!std::isfinite(a)) return a;
+    a = std::remainder(a, 2 * kPi);  // [-pi, pi]
+    return a <= -kPi ? a + 2 * kPi : a;
 }
 
 }  // namespace autoaim

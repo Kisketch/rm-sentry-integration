@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 
 namespace autoaim {
 
@@ -43,134 +44,71 @@ void TargetManager::Entry::update(const FrameObservations& frame) {
     else if (outpost) outpost->update(frame);
 }
 
-int TargetManager::matchEntry(const ArmorObservation& obs, double stamp) const {
-    int best = -1;
-    double best_d = std::numeric_limits<double>::max();
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
-        const Entry& e = entries_[i];
-        if (e.key != entryKey(obs.det)) continue;
-        const TargetState s = e.snapshot(stamp);
-        const TrackState st = e.state();
-        if (st == TrackState::LOST && e.last_seen <= 0) continue;
-        // Range-scaled gate: a fixed 1 m gate merges two robots standing
-        // within 1 m of each other at 10 m.  Close in the geometry is well
-        // constrained (0.4x), far out the same gate is needed (1.0x).
-        // LOST tracks get 1.4x rather than 2x: 2x was re-acquiring a target
-        // into its neighbour.
-        const double range_scale = std::clamp(0.35 + 0.065 * obs.distance, 0.40, 1.0);
-        const double gate = target_cfg_.association_gate * range_scale *
-                            (st == TrackState::LOST ? 1.4 : 1.0);
-        // Prefer a TRACKING track when two candidates are close.
-        const double penalty = st == TrackState::TRACKING ? 0.0 : 0.25;
-        for (int k = 0; k < s.armors_num; ++k) {
-            const ArmorState a = s.armorAt(k, stamp);
-            const double d = cv::norm(obs.position - a.position) + penalty;
-            if (d < gate && d < best_d) best_d = d, best = i;
-        }
-    }
-    return best;
-}
-
 void TargetManager::update(const FrameObservations& frame) {
-    std::vector<FrameObservations> per_entry(entries_.size());
-    for (auto& f : per_entry) {
-        f.frame = frame.frame;
-        f.stamp = frame.stamp;
+    // One track per identity.  A deviceId (colour + number + plate size) names
+    // exactly one physical robot and the outpost is a singleton, so every
+    // observation of a key is routed to that key's tracker.  The tracker's own
+    // association (Mahalanobis gate per plate) rejects outliers such as a
+    // misread digit, and its divergence guard re-seeds the filter when the
+    // robot is clearly elsewhere.
+    //
+    // The previous version pre-gated observations spatially and spawned a
+    // second entry for the same key when the gate failed.  That produced
+    // duplicate tracks sharing one id (the selector's and the aimer's
+    // hysteresis keyed on that id could then flip between them) and hid the
+    // far observation from the original tracker, which disabled its
+    // divergence guard.
+    std::vector<std::string> keys;  // first-seen order keeps updates deterministic
+    std::map<std::string, std::vector<ArmorObservation>> by_key;
+    for (const ArmorObservation& o : frame.armors) {
+        if (!(o.distance <= target_cfg_.max_distance)) continue;  // also drops NaN
+        const std::string k = entryKey(o.det);
+        auto it = by_key.find(k);
+        if (it == by_key.end()) {
+            keys.push_back(k);
+            it = by_key.emplace(k, std::vector<ArmorObservation>{}).first;
+        }
+        it->second.push_back(o);
     }
-    std::vector<bool> assigned(frame.armors.size(), false);
 
-    // Pass 1: attach observations to existing tracks.
-    for (int i = 0; i < static_cast<int>(frame.armors.size()); ++i) {
-        const ArmorObservation& o = frame.armors[i];
-        if (o.distance > target_cfg_.max_distance) continue;
-        const int e = matchEntry(o, frame.stamp);
-        if (e >= 0) {
-            per_entry[e].armors.push_back(o);
-            assigned[i] = true;
-        }
-    }
-
-    // Pass 2: create tracks for unassigned observations.  Observations that are
-    // close to the seed and carry the same label are attached to the new track
-    // immediately, so a two-plate frame does not create two half-trackers.
-    for (int i = 0; i < static_cast<int>(frame.armors.size()); ++i) {
-        if (assigned[i]) continue;
-        const ArmorObservation& seed = frame.armors[i];
-        if (seed.distance > target_cfg_.max_distance) continue;
-
-        // Reuse a lost track of the same label if the seed is near its last
-        // position.  Without this, a tracker that drops for a few frames leaves
-        // a duplicate behind and the duplicate steals observations.
-        int reuse = -1;
-        for (int e = 0; e < static_cast<int>(entries_.size()); ++e) {
-            if (entries_[e].key != entryKey(seed.det) || entries_[e].state() != TrackState::LOST)
-                continue;
-            const TargetState old = entries_[e].snapshot(frame.stamp);
-            for (int k = 0; k < old.armors_num; ++k) {
-                if (cv::norm(seed.position - old.armorAt(k, frame.stamp).position) <
-                    2.0 * target_cfg_.association_gate) {
-                    reuse = e;
-                    break;
-                }
-            }
-            if (reuse >= 0) break;
-        }
-
-        FrameObservations init;
-        init.frame = frame.frame;
-        init.stamp = frame.stamp;
-        init.armors.push_back(seed);
-        assigned[i] = true;
-        for (int j = i + 1; j < static_cast<int>(frame.armors.size()); ++j) {
-            if (assigned[j]) continue;
-            const ArmorObservation& o = frame.armors[j];
-            if (entryKey(o.det) != entryKey(seed.det)) continue;
-            if (cv::norm(o.position - seed.position) > 2.0 * target_cfg_.association_gate) continue;
-            init.armors.push_back(o);
-            assigned[j] = true;
-        }
-
-        if (reuse >= 0) {
-            entries_[reuse].reset();
-            entries_[reuse].last_seen = frame.stamp;
-            per_entry[reuse].armors = init.armors;
-            continue;
-        }
-
+    for (const std::string& k : keys) {
+        const bool exists = std::any_of(entries_.begin(), entries_.end(),
+                                        [&k](const Entry& e) { return e.key == k; });
+        if (exists) continue;
+        const ArmorObservation& seed = by_key[k].front();
         Entry e;
-        e.key = entryKey(seed.det);
-        e.label = seed.det.number;
-        if (seed.det.number == "outpost" || seed.det.type == ArmorType::OUTPOST) {
+        e.key = k;
+        if (k == "outpost") {
             e.label = "outpost";
             e.outpost = std::make_unique<OutpostTracker>(tracker_cfg_, camera_);
         } else {
+            e.label = seed.det.number;
             e.robot = std::make_unique<RobotTracker>(tracker_cfg_, camera_);
         }
         e.last_seen = frame.stamp;
         entries_.push_back(std::move(e));
-        per_entry.emplace_back();
-        per_entry.back().frame = frame.frame;
-        per_entry.back().stamp = frame.stamp;
-        per_entry.back().armors = init.armors;
     }
 
-    // Pass 3: update all tracks with their subset.  A newly created entry gets
-    // its seed observations here, exactly once.
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
-        const bool seen = !per_entry[i].armors.empty();
-        entries_[i].update(per_entry[i]);
-        if (seen) entries_[i].last_seen = frame.stamp;
+    // Every track is updated, seen or not: an unseen one predicts forward and
+    // walks its own TRACKING -> TEMP_LOST -> LOST state machine.
+    for (Entry& e : entries_) {
+        FrameObservations sub;
+        sub.frame = frame.frame;
+        sub.stamp = frame.stamp;
+        auto it = by_key.find(e.key);
+        if (it != by_key.end()) sub.armors = std::move(it->second);
+        const bool seen = !sub.armors.empty();
+        e.update(sub);
+        if (seen) e.last_seen = frame.stamp;
     }
 
     // Drop stale tracks.
-    entries_.erase(
-        std::remove_if(entries_.begin(), entries_.end(),
-                       [&](const Entry& e) {
-                           const bool lost = e.robot ? e.robot->state() == TrackState::LOST
-                                                     : e.outpost->state() == TrackState::LOST;
-                           return lost && frame.stamp - e.last_seen > target_cfg_.lost_keep_time;
-                       }),
-        entries_.end());
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                  [&](const Entry& e) {
+                                      return e.state() == TrackState::LOST &&
+                                             frame.stamp - e.last_seen > target_cfg_.lost_keep_time;
+                                  }),
+                   entries_.end());
 }
 
 std::vector<TargetState> TargetManager::snapshots(double t) const {
@@ -180,22 +118,29 @@ std::vector<TargetState> TargetManager::snapshots(double t) const {
     return out;
 }
 
+int TargetManager::priorityOf(const std::string& label) const {
+    for (int p = 0; p < static_cast<int>(target_cfg_.priority.size()); ++p)
+        if (target_cfg_.priority[p] == label) return p;
+    return std::numeric_limits<int>::max();
+}
+
+bool TargetManager::eligible(const TargetState& s) const {
+    if (!s.valid) return false;
+    if (target_cfg_.require_tracking && !s.tracking()) return false;
+    return cv::norm(s.center) <= target_cfg_.max_distance;
+}
+
 int TargetManager::select(const std::vector<TargetState>& states) const {
     int best = -1;
     double best_distance = std::numeric_limits<double>::max();
     int best_priority = std::numeric_limits<int>::max();
+    int previous = -1;
     for (int i = 0; i < static_cast<int>(states.size()); ++i) {
         const TargetState& s = states[i];
-        if (!s.valid) continue;
-        if (target_cfg_.require_tracking && !s.tracking()) continue;
+        if (!eligible(s)) continue;
+        if (!last_selected_id_.empty() && s.id == last_selected_id_) previous = i;
         const double d = cv::norm(s.center);
-        if (d > target_cfg_.max_distance) continue;
-        int prio = std::numeric_limits<int>::max();
-        for (int p = 0; p < static_cast<int>(target_cfg_.priority.size()); ++p)
-            if (target_cfg_.priority[p] == s.label) {
-                prio = p;
-                break;
-            }
+        const int prio = priorityOf(s.label);
         if (prio < best_priority || (prio == best_priority && d < best_distance)) {
             best_priority = prio;
             best_distance = d;
@@ -203,26 +148,14 @@ int TargetManager::select(const std::vector<TargetState>& states) const {
         }
     }
     // Target-switch hysteresis: keep the current target unless the challenger
-    // is clearly closer (or has a better priority class).
-    if (best >= 0 && !last_selected_id_.empty()) {
-        int previous = -1;
-        int previous_prio = std::numeric_limits<int>::max();
-        double previous_d = 0;
-        for (int i = 0; i < static_cast<int>(states.size()); ++i) {
-            if (states[i].id != last_selected_id_) continue;
-            previous = i;
-            previous_d = cv::norm(states[i].center);
-            for (int p = 0; p < static_cast<int>(target_cfg_.priority.size()); ++p)
-                if (target_cfg_.priority[p] == states[i].label) {
-                    previous_prio = p;
-                    break;
-                }
-            break;
-        }
-        if (previous >= 0 && previous != best && previous_prio == best_priority &&
-            previous_d <= best_distance + target_cfg_.switch_margin) {
-            best = previous;
-        }
+    // has a better priority class or is clearly closer.  Only an ELIGIBLE
+    // previous target can be kept: the old code also revived one that had
+    // dropped to TEMP_LOST/DETECTING (with require_tracking) or had moved
+    // beyond max_distance, because it searched all states for the id.
+    if (best >= 0 && previous >= 0 && previous != best &&
+        priorityOf(states[previous].label) == best_priority &&
+        cv::norm(states[previous].center) <= best_distance + target_cfg_.switch_margin) {
+        best = previous;
     }
     if (best >= 0) last_selected_id_ = states[best].id;
     return best;

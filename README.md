@@ -19,6 +19,19 @@
 > (target switch hysteresis + no fire while DETECTING). See the doc for the full
 > comparison and the remaining deployment gaps (MVS adapter, Buff, real
 > calibration).
+>
+> **Review 2026-11** ([`docs/review_2026-11.md`](docs/review_2026-11.md)): fixes for
+> the serial link (tty not in raw mode corrupted every `0x0D` byte; fd race
+> between reader and writer; live frames skipped by default), the multi-target
+> manager (duplicate tracks per identity; hysteresis reviving ineligible
+> targets), centre-mode lead, Singer extrapolation and `wrapAngle(inf)` hang;
+> ballistics 10x faster; config validation. Re-run the real-video regression
+> (`tools/regression.py`, `sentry_offline`) before merging - this review could
+> only run the simulator and unit tests.
+>
+> Note: `BASELINE.md`, `reports/`, `docs/detections/`, `docs/miss_analysis.md` and
+> the overlay figures referenced below belong to the main rm-autoaim repository /
+> the local data package and are not shipped in this tree.
 
 A complete, self-contained RoboMaster armor auto-aim pipeline in C++17 + OpenCV
 (no ROS, no Eigen). It was built by studying the best-known open-source RM
@@ -219,6 +232,7 @@ imgcodecs, videoio, highgui, calib3d, dnn).
 ```bash
 # Linux
 cmake -S . -B build && cmake --build build -j
+ctest --test-dir build --output-on-failure   # autoaim_tests, sentry_tests, serial_port_tests
 ./build/autoaim_tests
 ./build/autoaim_sim
 ./build/autoaim_video ../3.avi --out out --render 300:450
@@ -489,7 +503,7 @@ than a claim:
 | `max_match_distance` | 0.25 / **0.35** / 0.50 | 68.1 / 67.6 / 66.1 | 70.8 / 68.6 / 68.4 | 0.25 raises hit% but costs 1.1–1.2 hits/s → DPS worse |
 
 Only a structural change (higher frame rate, better yaw observation, gimbal
-feed-forward) can move the numbers now; see `docs/BACKLOG.md`.
+feed-forward) can move the numbers now; see `docs/SENTRY_BACKLOG.md`.
 
 ## Limitations / next steps
 

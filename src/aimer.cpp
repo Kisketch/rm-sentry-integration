@@ -59,6 +59,14 @@ double flightGuess(const Ballistics& ball, const cv::Vec3d& p) {
     return s.ok ? s.t_fly : cv::norm(p) / ball.config().bullet_speed;
 }
 
+// Mechanical trim, applied to the final command only (after plate choice and
+// fire gating), identically for every aimer.
+void applyOffsets(const AimerConfig& cfg, AimCommand& cmd) {
+    if (!cmd.valid) return;
+    cmd.yaw = wrapAngle(cmd.yaw + cfg.yaw_offset_deg * kPi / 180.0);
+    cmd.pitch += cfg.pitch_offset_deg * kPi / 180.0;
+}
+
 }  // namespace
 
 // ------------------------------------------------------------------ robot
@@ -127,11 +135,15 @@ AimCommand RobotAimer::aim(const TargetState& target, double now) const {
         const ArmorState a = target.armorAt(k, t0 + t_fly);
         cv::Vec3d aim_point;
         if (center_mode) {
-            // aim along the centre direction at the distance of the front plate
+            // Aim along the centre direction at the distance of the front plate,
+            // using the centre at IMPACT time: the robot keeps translating while
+            // the bullet flies (the old code used the centre at t0, i.e. no lead
+            // on a strafing spinner - v * t_fly of error, ~25 cm at 1 m/s).
+            const cv::Vec3d ci = target.centerAt(t0 + t_fly);
             const double r = a.radius;
-            const double dc = std::hypot(c0[0], c0[1]);
+            const double dc = std::max(1e-6, std::hypot(ci[0], ci[1]));
             const double s = std::max(0.3, dc - r);
-            aim_point = cv::Vec3d(c0[0] / dc * s, c0[1] / dc * s, a.position[2]);
+            aim_point = cv::Vec3d(ci[0] / dc * s, ci[1] / dc * s, a.position[2]);
         } else {
             aim_point = a.position;
         }
@@ -165,6 +177,7 @@ AimCommand RobotAimer::aim(const TargetState& target, double now) const {
     } else {
         cmd.fire = tracking && confident && std::abs(cmd.facing_deg) < cfg_.max_fire_facing_deg;
     }
+    applyOffsets(cfg_, cmd);
     return cmd;
 }
 
@@ -185,6 +198,7 @@ AimCommand PointAimer::aim(const PointTracker& tracker, double now) const {
     cmd.valid = true;
     cmd.t_impact = t0 + cmd.t_fly;
     cmd.fire = true;
+    applyOffsets(cfg_, cmd);
     return cmd;
 }
 
@@ -198,6 +212,7 @@ AimCommand DirectAimer::aim(const FrameObservations& frame, double now) const {
     cmd.valid = true;
     cmd.t_impact = now + cfg_.latency + cmd.t_fly;
     cmd.fire = true;
+    applyOffsets(cfg_, cmd);
     return cmd;
 }
 

@@ -15,6 +15,8 @@
 #include "autoaim/target.hpp"
 #include "autoaim/tracker.hpp"
 #include "autoaim/types.hpp"
+#include "sentry/roi.hpp"
+#include "sentry/serial_protocol.hpp"
 
 namespace sentry {
 
@@ -28,6 +30,10 @@ struct SentryOutput {
 class SentryVision {
 public:
     explicit SentryVision(const autoaim::Config& cfg);
+    // Members hold references to sibling members (pose_ and manager_ ->
+    // camera_, aimer_ -> ballistics_): a copy or move would dangle.
+    SentryVision(const SentryVision&) = delete;
+    SentryVision& operator=(const SentryVision&) = delete;
 
     // One frame.  `gimbal_*` is the IMU/serial attitude at the exposure time
     // (world = gimbal-centred, gravity aligned).  Pass zeros for fixed-camera
@@ -42,6 +48,8 @@ public:
     // margin), with a full scan every 30 frames and an immediate
     // full-frame retry when a windowed frame finds nothing. Off by default.
     void setRoiEnabled(bool on) { roi_enabled_ = on; }
+    // Windows used for the last frame (after merging), for overlays/tests.
+    const std::vector<cv::Rect>& roiWindows() const { return roi_windows_; }
     void reset() { manager_.reset(); }
     const autoaim::Config& config() const { return cfg_; }
     autoaim::Config& mutableConfig() { return cfg_; }
@@ -61,17 +69,11 @@ private:
     int frames_since_full_ = 0;
 };
 
-// Pack the command into the old sentry 21-byte frame (AA BB ... BB) so a
+// Convert a command for the old sentry 21-byte frame (AA BB ... BB) so a
 // deployment can reuse the existing MCU protocol.  yaw/pitch are in radians,
 // the protocol carries 1e-4 degrees, exactly like the old AutoArmor::Transmit.
-struct SerialCommand {
-    int32_t yaw = 0;
-    int32_t pitch = 0;
-    int32_t yaw_vel = 0;
-    uint8_t found = 0;
-    uint8_t fire = 0;
-};
 SerialCommand toSerial(const autoaim::AimCommand& cmd, double compensate_yaw_deg = 0.0,
                        double compensate_pitch_deg = 0.0, double yaw_vel_rad = 0.0);
+
 
 }  // namespace sentry

@@ -1,6 +1,9 @@
 #include "sentry/sentry.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <utility>
 
 namespace sentry {
 
@@ -41,9 +44,12 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
             if (!s.valid || !s.active()) continue;
             for (int k = 0; k < s.armors_num; ++k) {
                 const ArmorState a = s.armorAt(k, stamp);
-                if (a.position[0] < 0.5) continue;  // behind the gimbal plane
-                const auto corners = armorCorners(a.position, a.yaw,
-                                                  cfg_.pose.armor_pitch_deg * kPi / 180.0, s.type);
+                // Behind or too close to the CAMERA (the gimbal x axis is not the
+                // optical axis once the gimbal has turned).
+                if (camera_.worldToCamera(a.position)[2] < 0.3) continue;
+                const double pitch_deg = s.type == ArmorType::OUTPOST ? cfg_.pose.outpost_armor_pitch_deg
+                                                                      : cfg_.pose.armor_pitch_deg;
+                const auto corners = armorCorners(a.position, a.yaw, pitch_deg * kPi / 180.0, s.type);
                 double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
                 for (const auto& c : corners) {
                     const cv::Point2d px = camera_.project(c);
@@ -56,6 +62,7 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
                 if (w.width >= 8 && w.height >= 8) roi_windows_.push_back(w);
             }
         }
+        roi_windows_ = mergeWindows(std::move(roi_windows_));
     }
 
     std::vector<ArmorDetection> detections;

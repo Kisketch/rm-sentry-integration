@@ -12,6 +12,11 @@
 //
 //   ./build/sentry_robot --camera 0 --serial /dev/ttyACM0 --config config/sentry.yaml
 //   ./build/sentry_robot --video ../video/3.avi --serial "" --render
+//
+// --max-extrap-ms (default 10): a frame stamped at receipt is usually newer
+// than the last attitude sample that has arrived; up to this much the
+// attitude is extrapolated at the last measured rate instead of skipping the
+// frame (with 0 and --exposure-offset-ms 0 every live frame was skipped).
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
@@ -47,6 +52,7 @@ int main(int argc, char** argv) {
     double exposure_offset_ms = 0.0;  // live camera: receipt -> exposure lag
     double stamp_delay_ms = 1.5;      // serial: MCU sample -> host receipt lag
     double max_gap_ms = 50.0;         // serial: max attitude gap to interpolate
+    double max_extrap_ms = 10.0;      // serial: max extrapolation past the newest sample
     bool require_crc = false;         // serial: require the byte-2 CRC-8 extension
     bool roi = false;                 // tracking-guided windowed detection
 
@@ -63,6 +69,7 @@ int main(int argc, char** argv) {
         else if (a == "--exposure-offset-ms" && i + 1 < argc) exposure_offset_ms = std::stod(argv[++i]);
         else if (a == "--stamp-delay-ms" && i + 1 < argc) stamp_delay_ms = std::stod(argv[++i]);
         else if (a == "--max-gap-ms" && i + 1 < argc) max_gap_ms = std::stod(argv[++i]);
+        else if (a == "--max-extrap-ms" && i + 1 < argc) max_extrap_ms = std::stod(argv[++i]);
         else if (a == "--require-crc") require_crc = true;
         else if (a == "--roi") roi = true;
         else {
@@ -95,12 +102,14 @@ int main(int argc, char** argv) {
     std::unique_ptr<io::SerialPort> serial;
     if (!serial_device.empty())
         serial = std::make_unique<io::SerialPort>(serial_device, 115200, stamp_delay_ms / 1000.0,
-                                                  max_gap_ms / 1000.0, require_crc);
+                                                  max_gap_ms / 1000.0, require_crc,
+                                                  max_extrap_ms / 1000.0);
 
     autoaim::AimCommand last_cmd;
     double last_valid = -1e9;
     double last_cmd_stamp = -1e9;
     double last_cmd_yaw = 0;
+    std::string last_cmd_id;
     int processed = 0;
     std::uint64_t attitude_misses = 0;
     cv::Mat frame;
@@ -138,13 +147,20 @@ int main(int argc, char** argv) {
 
         sentry::SerialCommand sc;
         if (have_out && out.command.valid) {
+            // Feed-forward rate from consecutive commands of the SAME target
+            // only: across a target switch or a gap (skipped frames) the
+            // finite difference is a jump, not a rate, and used to saturate
+            // at gimbal_max_rate for one frame.
+            const std::string& id = out.targets[out.selected].id;
             double yaw_vel = 0;
-            if (last_cmd_stamp > 0 && stamp > last_cmd_stamp)
-                yaw_vel = autoaim::wrapAngle(out.command.yaw - last_cmd_yaw) / (stamp - last_cmd_stamp);
+            const double dt_cmd = stamp - last_cmd_stamp;
+            if (id == last_cmd_id && dt_cmd > 0 && dt_cmd < 0.1)
+                yaw_vel = autoaim::wrapAngle(out.command.yaw - last_cmd_yaw) / dt_cmd;
             yaw_vel = std::clamp(yaw_vel, -cfg.aimer.gimbal_max_rate, cfg.aimer.gimbal_max_rate);
             sc = sentry::toSerial(out.command, comp_yaw, comp_pitch, yaw_vel);
             last_cmd = out.command;
             last_cmd_yaw = out.command.yaw;
+            last_cmd_id = id;
             last_cmd_stamp = stamp;
             last_valid = stamp;
         } else if (stamp - last_valid < 0.5 && last_cmd.valid) {
@@ -180,7 +196,8 @@ int main(int argc, char** argv) {
     if (serial)
         std::cout << ", attitude misses " << attitude_misses << " (serial received "
                   << serial->receivedFrames() << ", failed queries " << serial->failedQueries()
-                  << ", crc failures " << serial->crcFailures() << ")";
+                  << ", crc failures " << serial->crcFailures() << ", reconnects "
+                  << serial->reconnects() << ")";
     std::cout << "\n";
     return 0;
 }

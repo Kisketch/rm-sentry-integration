@@ -1,18 +1,33 @@
 // Old sentry serial protocol, kept byte-compatible so the new vision core can
 // drop into an existing MCU without a protocol rewrite.
 //
-// MCU -> vision (17 bytes):  AA BB [yaw i32][pitch i32][roll i32] color buff BB
+// MCU -> vision (17 bytes):  AA BB [crc/pad] [yaw i32][pitch i32][roll i32] color buff
+//                            (bytes 0-1 header, 2 spare/CRC, 3-14 angles,
+//                             15 colour, 16 armor_or_buff; no tail byte)
 // vision -> MCU (21 bytes):  AA BB [yaw i32][pitch i32][yaw_vel i32][ui_x i32]
-//                            [ui_y i32] found fire BB
+//                            found fire BB   (bytes 2-17 payload, 18, 19, tail 20)
 // All integers are big-endian; angles are 1e-4 degrees.
+//
+// This header is deliberately free of OpenCV / vision includes so the MCU-side
+// tooling and the serial driver can use it on their own.
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
-#include "sentry/sentry.hpp"
-
 namespace sentry {
+
+// Command payload of the 21-byte control frame.  yaw/pitch/yaw_vel are 1e-4
+// degrees (rad/s for yaw_vel scaled the same way), exactly like the old
+// AutoArmor::Transmit.  Build it from an AimCommand with sentry::toSerial().
+struct SerialCommand {
+    int32_t yaw = 0;
+    int32_t pitch = 0;
+    int32_t yaw_vel = 0;
+    uint8_t found = 0;
+    uint8_t fire = 0;
+};
 
 struct AttitudeFrame {
     double stamp = 0.0;   // seconds, local monotonic clock

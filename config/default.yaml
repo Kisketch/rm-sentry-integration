@@ -88,6 +88,9 @@ aimer:
    fire_sigma_scale: 0.       # covariance fire gate; off: Q is tuned for response, not calibrated
    gimbal_tau: 0.03
    gimbal_max_rate: 12.
+   # Mechanical trim added to the final command (deg); measure on the robot.
+   yaw_offset_deg: 0.
+   pitch_offset_deg: 0.
 
 eval:
    fps: 25.
