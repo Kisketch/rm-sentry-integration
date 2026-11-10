@@ -31,15 +31,27 @@ double nowSeconds() {
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+// Extract (yaw, pitch, roll) in the setGimbalAttitude convention
+// R = Rz(yaw) * Ry(-pitch) * Rx(roll) from a rotation matrix built that way.
+void yawPitchRollFromMat(const cv::Matx33d& R, double& yaw, double& pitch, double& roll) {
+    yaw = std::atan2(R(1, 0), R(0, 0));
+    const double theta = std::atan2(-R(2, 0), std::sqrt(R(0, 0) * R(0, 0) + R(1, 0) * R(1, 0)));
+    pitch = -theta;  // the Ry angle is -pitch in this convention
+    roll = std::atan2(R(2, 1), R(2, 2));
+}
+
 }  // namespace
 
-SerialPort::SerialPort(std::string device, int baud) : device_(std::move(device)), baud_(baud) {
+SerialPort::SerialPort(std::string device, int baud, double stamp_delay_s, double max_gap_s)
+    : device_(std::move(device)),
+      baud_(baud),
+      stamp_delay_s_(stamp_delay_s),
+      poses_(512, max_gap_s) {
     if (openDevice()) thread_ = std::thread(&SerialPort::readerLoop, this);
 }
 
 SerialPort::~SerialPort() {
     quit_ = true;
-    cv_.notify_all();
     if (thread_.joinable()) thread_.join();
     close();
 }
@@ -112,13 +124,17 @@ void SerialPort::readerLoop() {
             }
             sentry::AttitudeFrame a;
             if (sentry::parseAttitude(buf.data() + consumed, sentry::kAttitudeSize, a)) {
-                a.stamp = nowSeconds();
+                // The protocol carries no MCU timestamp: stamp on receipt,
+                // minus the estimated sample->receipt lag.  The quaternion
+                // uses the setGimbalAttitude convention (Ry angle = -pitch).
+                a.stamp = nowSeconds() - stamp_delay_s_;
+                poses_.push({a.stamp, autoaim::quatFromYawPitchRoll(a.yaw, -a.pitch, a.roll)});
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    queue_.push_back(a);
-                    while (queue_.size() > 64) queue_.pop_front();
+                    meta_.push_back({a.stamp, a.color, a.armor_or_buff});
+                    while (meta_.size() > 128) meta_.pop_front();
                 }
-                cv_.notify_all();
+                ++received_;
                 consumed += sentry::kAttitudeSize;
             } else {
                 ++consumed;
@@ -146,24 +162,32 @@ bool SerialPort::send(const std::array<uint8_t, sentry::kControlSize>& frame) {
 }
 
 bool SerialPort::query(double stamp, sentry::AttitudeFrame& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (queue_.empty()) return false;
-    while (queue_.size() > 2 && queue_[1].stamp < stamp) queue_.pop_front();
-    if (queue_.size() == 1 || stamp <= queue_.front().stamp) {
-        out = queue_.front();
-        return true;
+    autoaim::Quat q;
+    if (!poses_.query(stamp, q)) {
+        ++failed_queries_;
+        return false;
     }
-    const auto& a = queue_[0];
-    const auto& b = queue_[1];
-    const double span = b.stamp - a.stamp;
-    const double u = span > 1e-9 ? std::clamp((stamp - a.stamp) / span, 0.0, 1.0) : 1.0;
-    out = a;
+    yawPitchRollFromMat(autoaim::quatToMat(q), out.yaw, out.pitch, out.roll);
     out.stamp = stamp;
-    out.yaw = a.yaw + u * std::remainder(b.yaw - a.yaw, 2.0 * M_PI);
-    out.pitch = a.pitch + u * (b.pitch - a.pitch);
-    out.roll = a.roll + u * (b.roll - a.roll);
-    out.color = b.color;
-    out.armor_or_buff = b.armor_or_buff;
+    out.color = 0;
+    out.armor_or_buff = 1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Newest metadata at or before the stamp; the earliest if the stamp
+        // precedes all of them (can only happen right at startup).
+        for (const auto& m : meta_) {
+            if (m.stamp <= stamp) {
+                out.color = m.color;
+                out.armor_or_buff = m.armor_or_buff;
+            } else {
+                break;
+            }
+        }
+        if (!meta_.empty() && stamp < meta_.front().stamp) {
+            out.color = meta_.front().color;
+            out.armor_or_buff = meta_.front().armor_or_buff;
+        }
+    }
     return true;
 }
 

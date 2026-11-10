@@ -13,6 +13,7 @@ add_library(autoaim_core STATIC
     src/config.cpp
     src/detector.cpp
     src/pose.cpp
+    src/pose_buffer.cpp
     src/tracker.cpp
     src/target.cpp
     src/ballistics.cpp
@@ -60,6 +61,14 @@ target_link_libraries(autoaim_tests PRIVATE autoaim_core)
 add_executable(sentry_tests tests/test_sentry.cpp)
 target_link_libraries(sentry_tests PRIVATE autoaim_core)
 
+if (UNIX AND NOT APPLE)
+    add_executable(serial_port_tests tests/serial_port_test.cpp)
+    target_link_libraries(serial_port_tests PRIVATE autoaim_core util)
+endif()
+
 enable_testing()
 add_test(NAME autoaim_tests COMMAND autoaim_tests)
 add_test(NAME sentry_tests COMMAND sentry_tests)
+if (UNIX AND NOT APPLE)
+    add_test(NAME serial_port_tests COMMAND serial_port_tests)
+endif()

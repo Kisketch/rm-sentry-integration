@@ -2,6 +2,14 @@
 // -> integrated sentry vision -> 21-byte control frame.  This is intentionally
 // transport-thin; swap cv::VideoCapture for the HikRobot source on the IT13.
 //
+// Attitude timing (G-02): each frame is stamped with its estimated exposure
+// time - frame receipt time minus --exposure-offset-ms for a live camera
+// (bench-measured readout + transfer lag; the MVS source in rm-autoaim
+// provides true hardware stamps and needs no offset) - and the gimbal
+// attitude is SLERP-interpolated at that stamp by io::SerialPort.  When no
+// attitude brackets the stamp the frame is skipped (never processed with a
+// stale or zero attitude) and counted in the summary line.
+//
 //   ./build/sentry_robot --camera 0 --serial /dev/ttyACM0 --config config/sentry.yaml
 //   ./build/sentry_robot --video ../video/3.avi --serial "" --render
 #include <opencv2/opencv.hpp>
@@ -9,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <iostream>
 #include <string>
@@ -35,6 +44,9 @@ int main(int argc, char** argv) {
     bool render = false;
     int max_frames = -1;
     double comp_yaw = 0, comp_pitch = 0;
+    double exposure_offset_ms = 0.0;  // live camera: receipt -> exposure lag
+    double stamp_delay_ms = 1.5;      // serial: MCU sample -> host receipt lag
+    double max_gap_ms = 50.0;         // serial: max attitude gap to interpolate
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -46,6 +58,9 @@ int main(int argc, char** argv) {
         else if (a == "--max-frames" && i + 1 < argc) max_frames = std::stoi(argv[++i]);
         else if (a == "--comp-yaw" && i + 1 < argc) comp_yaw = std::stod(argv[++i]);
         else if (a == "--comp-pitch" && i + 1 < argc) comp_pitch = std::stod(argv[++i]);
+        else if (a == "--exposure-offset-ms" && i + 1 < argc) exposure_offset_ms = std::stod(argv[++i]);
+        else if (a == "--stamp-delay-ms" && i + 1 < argc) stamp_delay_ms = std::stod(argv[++i]);
+        else if (a == "--max-gap-ms" && i + 1 < argc) max_gap_ms = std::stod(argv[++i]);
         else {
             std::cerr << "unknown argument: " << a << "\n";
             return 1;
@@ -73,33 +88,51 @@ int main(int argc, char** argv) {
     cap.set(cv::CAP_PROP_FPS, cfg.eval.fps);
 
     std::unique_ptr<io::SerialPort> serial;
-    if (!serial_device.empty()) serial = std::make_unique<io::SerialPort>(serial_device, 115200);
+    if (!serial_device.empty())
+        serial = std::make_unique<io::SerialPort>(serial_device, 115200, stamp_delay_ms / 1000.0,
+                                                  max_gap_ms / 1000.0);
 
     autoaim::AimCommand last_cmd;
     double last_valid = -1e9;
     double last_cmd_stamp = -1e9;
     double last_cmd_yaw = 0;
     int processed = 0;
+    std::uint64_t attitude_misses = 0;
     cv::Mat frame;
     while (cap.read(frame)) {
         if (max_frames > 0 && processed >= max_frames) break;
-        const double stamp = nowSeconds();
+        // Exposure-time estimate: receipt time, minus the measured lag for a
+        // live camera.  Video files keep receipt-time stamps (offline mode
+        // has no serial attitude to align with anyway).
+        const double t_recv = nowSeconds();
+        const double stamp = video.empty() ? t_recv - exposure_offset_ms / 1000.0 : t_recv;
 
         sentry::AttitudeFrame attitude;
-        attitude.stamp = stamp;
         bool have_attitude = false;
-        if (serial && serial->query(stamp, attitude)) {
-            have_attitude = true;
-            vision.setEnemyColor(attitude.color == 1 ? autoaim::Color::RED
-                                                     : autoaim::Color::BLUE);
+        if (serial) {
+            if (serial->query(stamp, attitude)) {
+                have_attitude = true;
+                vision.setEnemyColor(attitude.color == 1 ? autoaim::Color::RED
+                                                         : autoaim::Color::BLUE);
+            } else {
+                ++attitude_misses;
+            }
         }
 
-        const auto out = vision.process(frame, stamp, have_attitude ? attitude.yaw : 0.0,
-                                        have_attitude ? attitude.pitch : 0.0,
-                                        have_attitude ? attitude.roll : 0.0);
+        // With a serial link, a frame without a bracketed attitude is skipped
+        // entirely: processing it with a stale or zero attitude would poison
+        // the tracker with a wrong world frame.  The hold logic below still
+        // runs, so the MCU keeps getting non-firing commands meanwhile.
+        sentry::SentryOutput out;
+        const bool have_out = !serial || have_attitude;
+        if (have_out) {
+            out = vision.process(frame, stamp, have_attitude ? attitude.yaw : 0.0,
+                                 have_attitude ? attitude.pitch : 0.0,
+                                 have_attitude ? attitude.roll : 0.0);
+        }
 
         sentry::SerialCommand sc;
-        if (out.command.valid) {
+        if (have_out && out.command.valid) {
             double yaw_vel = 0;
             if (last_cmd_stamp > 0 && stamp > last_cmd_stamp)
                 yaw_vel = autoaim::wrapAngle(out.command.yaw - last_cmd_yaw) / (stamp - last_cmd_stamp);
@@ -116,7 +149,7 @@ int main(int argc, char** argv) {
         }
         if (serial) serial->send(sentry::packControl(sc));
 
-        if (render) {
+        if (render && have_out) {
             for (const auto& o : out.observations.armors)
                 for (int i = 0; i < 4; ++i)
                     cv::line(frame, o.det.corners[i], o.det.corners[(i + 1) % 4],
@@ -138,6 +171,10 @@ int main(int argc, char** argv) {
         }
         ++processed;
     }
-    std::cout << "processed " << processed << " frames\n";
+    std::cout << "processed " << processed << " frames";
+    if (serial)
+        std::cout << ", attitude misses " << attitude_misses << " (serial received "
+                  << serial->receivedFrames() << ", failed queries " << serial->failedQueries() << ")";
+    std::cout << "\n";
     return 0;
 }
