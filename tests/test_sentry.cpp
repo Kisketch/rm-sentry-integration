@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "autoaim/aimer.hpp"
+#include "autoaim/detector.hpp"
 #include "autoaim/ballistics.hpp"
 #include "autoaim/pose.hpp"
 #include "autoaim/target.hpp"
@@ -252,7 +253,25 @@ void testSerialProtocol() {
 
 }  // namespace
 
+void testDetectorDegenerateInputs() {
+    // Regression: detect() used to segfault on empty/degenerate frames.
+    autoaim::DetectorConfig dc;
+    dc.model_path = "";
+    autoaim::Detector det(dc);
+    cv::Mat empty;
+    CHECK(det.detect(empty).empty());
+    cv::Mat tiny(1, 1, CV_8UC3, cv::Scalar(0, 0, 255));
+    CHECK(det.detect(tiny).empty());
+    cv::Mat gray(64, 64, CV_8UC1, cv::Scalar(200));
+    CHECK(det.detect(gray).empty());
+    cv::Mat fl(64, 64, CV_32FC3, cv::Scalar(0.5f, 0.5f, 0.5f));
+    CHECK(det.detect(fl).empty());
+    // Windowed path on a degenerate frame must be equally safe.
+    CHECK(det.detect(empty, std::vector<cv::Rect>{{0, 0, 100, 100}}).empty());
+}
+
 int main() {
+    testDetectorDegenerateInputs();
     testCameraExtrinsic();
     testPoseSolver();
     testOutpostTracker();

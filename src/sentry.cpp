@@ -23,8 +23,38 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
     out.observations.frame = static_cast<int>(std::lround(stamp * cfg_.eval.fps));
     out.observations.stamp = stamp;
 
-    const auto detections = detector_.detect(bgr);
+    std::vector<ArmorDetection> detections;
+    if (roi_enabled_ && !roi_windows_.empty() && frames_since_full_ < 30) {
+        detections = detector_.detect(bgr, roi_windows_);
+        ++frames_since_full_;
+        if (detections.empty()) {  // target may have left the windows: rescan now
+            detections = detector_.detect(bgr);
+            frames_since_full_ = 0;
+        }
+    } else {
+        detections = detector_.detect(bgr);
+        frames_since_full_ = 0;
+    }
     out.observations.armors = pose_.solveAll(detections);
+
+    // Rebuild next frame's windows from this frame's solved armors,
+    // projected with the current gimbal attitude, plus a safety margin.
+    roi_windows_.clear();
+    if (roi_enabled_) {
+        constexpr int kMargin = 110;
+        for (const auto& o : out.observations.armors) {
+            const auto corners = armorCorners(o.position, o.yaw,
+                                              cfg_.pose.armor_pitch_deg * kPi / 180.0, o.det.type);
+            double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+            for (const auto& c : corners) {
+                const cv::Point2d px = camera_.project(c);
+                x0 = std::min(x0, px.x), y0 = std::min(y0, px.y);
+                x1 = std::max(x1, px.x), y1 = std::max(y1, px.y);
+            }
+            roi_windows_.emplace_back(cvRound(x0) - kMargin, cvRound(y0) - kMargin,
+                                      cvRound(x1 - x0) + 2 * kMargin, cvRound(y1 - y0) + 2 * kMargin);
+        }
+    }
 
     manager_.update(out.observations);
     out.targets = manager_.snapshots(stamp);

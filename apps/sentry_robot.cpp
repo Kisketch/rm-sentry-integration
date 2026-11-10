@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
     double stamp_delay_ms = 1.5;      // serial: MCU sample -> host receipt lag
     double max_gap_ms = 50.0;         // serial: max attitude gap to interpolate
     bool require_crc = false;         // serial: require the byte-2 CRC-8 extension
+    bool roi = false;                 // tracking-guided windowed detection
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -63,6 +64,7 @@ int main(int argc, char** argv) {
         else if (a == "--stamp-delay-ms" && i + 1 < argc) stamp_delay_ms = std::stod(argv[++i]);
         else if (a == "--max-gap-ms" && i + 1 < argc) max_gap_ms = std::stod(argv[++i]);
         else if (a == "--require-crc") require_crc = true;
+        else if (a == "--roi") roi = true;
         else {
             std::cerr << "unknown argument: " << a << "\n";
             return 1;
@@ -77,6 +79,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     sentry::SentryVision vision(cfg);
+    if (roi) vision.setRoiEnabled(true);
 
     cv::VideoCapture cap;
     if (!video.empty()) cap.open(video);

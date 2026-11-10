@@ -36,6 +36,11 @@ public:
                          double gimbal_pitch = 0.0, double gimbal_roll = 0.0);
 
     void setEnemyColor(autoaim::Color c) { detector_.setEnemyColor(c); }
+    // Tracking-guided windowed detection (docs/roi_detection.md): search
+    // only around the previous frame's solved armors, with a full scan
+    // every 30 frames and an immediate full-frame retry when a windowed
+    // frame finds nothing. Off by default.
+    void setRoiEnabled(bool on) { roi_enabled_ = on; }
     void reset() { manager_.reset(); }
     const autoaim::Config& config() const { return cfg_; }
     autoaim::Config& mutableConfig() { return cfg_; }
@@ -50,6 +55,9 @@ private:
     autoaim::Ballistics ballistics_;
     autoaim::TargetManager manager_;
     autoaim::RobotAimer aimer_;
+    bool roi_enabled_ = false;
+    std::vector<cv::Rect> roi_windows_;
+    int frames_since_full_ = 0;
 };
 
 // Pack the command into the old sentry 21-byte frame (AA BB ... BB) so a

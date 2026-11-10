@@ -120,6 +120,10 @@ Detector::Detector(const DetectorConfig& cfg)
       classifier_(cfg.model_path, cfg.label_path, cfg.classify_threshold, cfg.ignore_classes) {}
 
 std::vector<Light> Detector::findLights(const cv::Mat& bgr, cv::Mat& mask) const {
+    return findLightsIn(bgr, {0, 0}, mask);
+}
+
+std::vector<Light> Detector::findLightsIn(const cv::Mat& bgr, cv::Point offset, cv::Mat& mask) const {
     if (bgr.type() == CV_8UC3) {
         // Fused single pass replacing split + subtract + threshold.
         // Bit-exact with the old chain: saturating channel difference,
@@ -168,6 +172,13 @@ std::vector<Light> Detector::findLights(const cv::Mat& bgr, cv::Mat& mask) const
         if (area / (w * h) < cfg_.min_fill_ratio) continue;
         Light l = makeLight(rect, cfg_.enemy_color);
         if (l.tilt_deg > cfg_.max_light_tilt_deg) continue;
+        if (offset.x != 0 || offset.y != 0) {
+            const cv::Point2f o(static_cast<float>(offset.x), static_cast<float>(offset.y));
+            l.rect.center += o;
+            l.top += o;
+            l.bottom += o;
+            l.center += o;
+        }
         lights.push_back(l);
     }
     if (lights.size() > 40) {
@@ -327,14 +338,31 @@ void Detector::refineCorners(const cv::Mat& gray, Light& light) const {
     light.length = new_len;
 }
 
-std::vector<ArmorDetection> Detector::detect(const cv::Mat& bgr, DetectorDebug* debug) {
-    cv::Mat mask;
-    std::vector<Light> lights = findLights(bgr, mask);
-    std::vector<ArmorDetection> armors = matchLights(lights);
+bool Detector::normalizeFrame(const cv::Mat& bgr, cv::Mat& frame) const {
+    // A dropped camera frame arrives as an empty Mat; cv::split on it yields
+    // zero channels and the old code segfaulted on ch[2]. Treat empty (and
+    // degenerate sub-2px) frames as "no armors" instead of crashing.
+    // Grayscale frames are converted; anything that is not 8-bit 1/3-channel
+    // is rejected, never crashed on.
+    if (bgr.empty() || bgr.rows < 2 || bgr.cols < 2) return false;
+    if (bgr.type() == CV_8UC3) {
+        frame = bgr;
+        return true;
+    }
+    if (bgr.type() == CV_8UC1) {
+        cv::cvtColor(bgr, frame, cv::COLOR_GRAY2BGR);
+        return true;
+    }
+    return false;
+}
 
+std::vector<ArmorDetection> Detector::finishDetect(const cv::Mat& frame,
+                                                   std::vector<Light> lights,
+                                                   const cv::Mat& mask, DetectorDebug* debug) {
+    std::vector<ArmorDetection> armors = matchLights(lights);
     if (cfg_.refine_corners && !armors.empty()) {
         cv::Mat gray;
-        cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
         for (auto& a : armors) {
             refineCorners(gray, a.left);
             refineCorners(gray, a.right);
@@ -349,8 +377,48 @@ std::vector<ArmorDetection> Detector::detect(const cv::Mat& bgr, DetectorDebug* 
         debug->lights = lights;
         debug->pairs_before_classify = static_cast<int>(armors.size());
     }
-    classifier_.classify(bgr, armors);
+    classifier_.classify(frame, armors);
     return armors;
+}
+
+std::vector<ArmorDetection> Detector::detect(const cv::Mat& bgr, DetectorDebug* debug) {
+    cv::Mat frame;
+    if (!normalizeFrame(bgr, frame)) return {};
+    cv::Mat mask;
+    std::vector<Light> lights = findLights(frame, mask);
+    return finishDetect(frame, std::move(lights), mask, debug);
+}
+
+std::vector<ArmorDetection> Detector::detect(const cv::Mat& bgr,
+                                             const std::vector<cv::Rect>& windows,
+                                             DetectorDebug* debug) {
+    if (windows.empty()) return detect(bgr, debug);
+    cv::Mat frame;
+    if (!normalizeFrame(bgr, frame)) return {};
+    const cv::Rect frame_rect(0, 0, frame.cols, frame.rows);
+    cv::Mat fullmask;
+    if (debug) fullmask = cv::Mat::zeros(frame.rows, frame.cols, CV_8UC1);
+    std::vector<Light> lights;
+    for (const cv::Rect& w0 : windows) {
+        const cv::Rect w = w0 & frame_rect;
+        if (w.width < 8 || w.height < 8) continue;
+        cv::Mat submask;
+        std::vector<Light> sub = findLightsIn(frame(w), w.tl(), submask);
+        lights.insert(lights.end(), sub.begin(), sub.end());
+        if (debug) submask.copyTo(fullmask(w));
+    }
+    std::vector<Light> unique;
+    for (const Light& l : lights) {
+        bool dup = false;
+        for (const Light& u : unique) {
+            if (cv::norm(l.center - u.center) < 2.0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) unique.push_back(l);
+    }
+    return finishDetect(frame, std::move(unique), fullmask, debug);
 }
 
 }  // namespace autoaim
