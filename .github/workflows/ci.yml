@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, optimize/**, review/** ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        timeout-minutes: 8
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get install -y --no-install-recommends libopencv-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      # autoaim_tests, sentry_tests, serial_port_tests (PTY end to end)
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Simulator smoke test (sentry config)
+        run: ./build/autoaim_sim --config config/sentry.yaml --seconds 5
