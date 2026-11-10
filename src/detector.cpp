@@ -200,6 +200,7 @@ std::vector<ArmorDetection> Detector::matchLights(const std::vector<Light>& ligh
             ArmorDetection d;
             d.left = *l;
             d.right = *r;
+            d.color = l->color;
             const float center_ratio = static_cast<float>(cv::norm(r->center - l->center)) / avg;
             d.type = center_ratio > cfg_.large_plate_ratio ? ArmorType::LARGE : ArmorType::SMALL;
             const float score = angle_diff / cfg_.max_pair_angle_diff_deg +

@@ -80,7 +80,19 @@ struct ArmorDetection {
     std::string number;       // "1".."4", "outpost", "guard", "base"
     float confidence = 0.f;
     cv::Mat number_img;       // 28x28 binarised digit (debug)
+    Color color = Color::RED;  // team colour the plate was detected as
 };
+
+// Identity of the physical robot a detection belongs to.  The number alone
+// is NOT an identity: both teams field a "3", and a hero's large "1" is a
+// different vehicle from anything else wearing "1".  Trackers and the
+// target manager key on this (colour + number + plate size).
+inline std::string deviceId(const ArmorDetection& det) {
+    return std::string(det.color == Color::RED ? "R" : "B") + det.number +
+           (det.type == ArmorType::LARGE    ? ":large"
+            : det.type == ArmorType::OUTPOST ? ":outpost"
+                                             : ":small");
+}
 
 // An armor with a 3-D pose in the world frame.
 struct ArmorObservation {

@@ -42,11 +42,13 @@ void yawPitchRollFromMat(const cv::Matx33d& R, double& yaw, double& pitch, doubl
 
 }  // namespace
 
-SerialPort::SerialPort(std::string device, int baud, double stamp_delay_s, double max_gap_s)
+SerialPort::SerialPort(std::string device, int baud, double stamp_delay_s, double max_gap_s,
+                       bool require_crc)
     : device_(std::move(device)),
       baud_(baud),
       stamp_delay_s_(stamp_delay_s),
-      poses_(512, max_gap_s) {
+      poses_(512, max_gap_s),
+      require_crc_(require_crc) {
     if (openDevice()) thread_ = std::thread(&SerialPort::readerLoop, this);
 }
 
@@ -123,7 +125,12 @@ void SerialPort::readerLoop() {
                 continue;
             }
             sentry::AttitudeFrame a;
-            if (sentry::parseAttitude(buf.data() + consumed, sentry::kAttitudeSize, a)) {
+            const bool parsed =
+                require_crc_
+                    ? sentry::parseAttitudeCrc(buf.data() + consumed, sentry::kAttitudeSize, a)
+                    : sentry::parseAttitude(buf.data() + consumed, sentry::kAttitudeSize, a);
+            if (!parsed && require_crc_) ++crc_failures_;
+            if (parsed) {
                 // The protocol carries no MCU timestamp: stamp on receipt,
                 // minus the estimated sample->receipt lag.  The quaternion
                 // uses the setGimbalAttitude convention (Ry angle = -pitch).

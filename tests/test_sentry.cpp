@@ -221,6 +221,33 @@ void testSerialProtocol() {
     CHECK(b[0] == 0xAA && b[1] == 0xBB && b[20] == 0xBB);
     CHECK(b[18] == 1 && b[19] == 2);
     CHECK(b[2] == 0 && b[5] == 111);
+
+    // CRC extension: packAttitude roundtrips (roll exercises the +pi wire
+    // convention), a tampered payload fails the strict parse but still
+    // passes the legacy one, and a legacy frame (byte 2 = 0) is rejected by
+    // the strict parse - which is why require_crc stays opt-in.
+    sentry::AttitudeFrame f;
+    f.yaw = 0.3;
+    f.pitch = -0.12;
+    f.roll = 2.9;
+    f.color = 1;
+    f.armor_or_buff = 0;
+    const auto packed = sentry::packAttitude(f, true);
+    CHECK(packed[2] == sentry::attitudeCrc(packed.data()));
+    sentry::AttitudeFrame g;
+    CHECK(sentry::parseAttitudeCrc(packed.data(), packed.size(), g));
+    CHECK(std::abs(g.yaw - f.yaw) < 2e-4 && std::abs(g.pitch - f.pitch) < 2e-4 &&
+          std::abs(g.roll - f.roll) < 2e-4);
+    CHECK(g.color == 1 && g.armor_or_buff == 0);
+    auto tampered = packed;
+    tampered[5] ^= 0xFF;
+    sentry::AttitudeFrame t;
+    CHECK(!sentry::parseAttitudeCrc(tampered.data(), tampered.size(), t));
+    CHECK(sentry::parseAttitude(tampered.data(), tampered.size(), t));  // legacy ignores byte 2
+    const auto legacy = sentry::packAttitude(f, false);
+    CHECK(legacy[2] == 0);
+    CHECK(!sentry::parseAttitudeCrc(legacy.data(), legacy.size(), t));
+    CHECK(sentry::parseAttitude(legacy.data(), legacy.size(), t));
 }
 
 }  // namespace

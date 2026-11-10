@@ -37,7 +37,8 @@ private:
     struct Entry {
         std::unique_ptr<RobotTracker> robot;
         std::unique_ptr<OutpostTracker> outpost;
-        std::string label;
+        std::string key;    // deviceId of the seed (or "outpost"): matching identity
+        std::string label;  // display label: the plate number (or "outpost")
         double last_seen = 0.0;
 
         bool active() const;

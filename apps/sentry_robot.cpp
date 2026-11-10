@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
     double exposure_offset_ms = 0.0;  // live camera: receipt -> exposure lag
     double stamp_delay_ms = 1.5;      // serial: MCU sample -> host receipt lag
     double max_gap_ms = 50.0;         // serial: max attitude gap to interpolate
+    bool require_crc = false;         // serial: require the byte-2 CRC-8 extension
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
         else if (a == "--exposure-offset-ms" && i + 1 < argc) exposure_offset_ms = std::stod(argv[++i]);
         else if (a == "--stamp-delay-ms" && i + 1 < argc) stamp_delay_ms = std::stod(argv[++i]);
         else if (a == "--max-gap-ms" && i + 1 < argc) max_gap_ms = std::stod(argv[++i]);
+        else if (a == "--require-crc") require_crc = true;
         else {
             std::cerr << "unknown argument: " << a << "\n";
             return 1;
@@ -90,7 +92,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<io::SerialPort> serial;
     if (!serial_device.empty())
         serial = std::make_unique<io::SerialPort>(serial_device, 115200, stamp_delay_ms / 1000.0,
-                                                  max_gap_ms / 1000.0);
+                                                  max_gap_ms / 1000.0, require_crc);
 
     autoaim::AimCommand last_cmd;
     double last_valid = -1e9;
@@ -174,7 +176,8 @@ int main(int argc, char** argv) {
     std::cout << "processed " << processed << " frames";
     if (serial)
         std::cout << ", attitude misses " << attitude_misses << " (serial received "
-                  << serial->receivedFrames() << ", failed queries " << serial->failedQueries() << ")";
+                  << serial->receivedFrames() << ", failed queries " << serial->failedQueries()
+                  << ", crc failures " << serial->crcFailures() << ")";
     std::cout << "\n";
     return 0;
 }

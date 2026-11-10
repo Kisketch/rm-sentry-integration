@@ -87,6 +87,7 @@ private:
     Mat P_;
     double stamp_ = 0;
     double last_match_stamp_ = 0;
+    std::string label_;  // plate number for display (id_ is the deviceId)
     std::string id_;
     int detect_count_ = 0;
     int unmatched_with_target_ = 0;

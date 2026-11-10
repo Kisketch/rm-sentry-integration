@@ -33,8 +33,11 @@ namespace io {
 
 class SerialPort {
 public:
+    // require_crc: reject attitude frames whose byte-2 CRC-8 does not check
+    // out.  Only enable once the MCU firmware fills byte 2 (see
+    // serial_protocol.hpp); the legacy sender leaves it 0.
     SerialPort(std::string device, int baud = 115200, double stamp_delay_s = 0.0015,
-               double max_gap_s = 0.05);
+               double max_gap_s = 0.05, bool require_crc = false);
     ~SerialPort();
 
     SerialPort(const SerialPort&) = delete;
@@ -53,6 +56,7 @@ public:
     // Diagnostics for the G-02 bench checks.
     std::uint64_t receivedFrames() const { return received_.load(); }
     std::uint64_t failedQueries() const { return failed_queries_.load(); }
+    std::uint64_t crcFailures() const { return crc_failures_.load(); }
     std::size_t samplesBuffered() const { return poses_.size(); }
 
 private:
@@ -81,6 +85,8 @@ private:
 
     std::atomic<std::uint64_t> received_{0};
     std::atomic<std::uint64_t> failed_queries_{0};
+    std::atomic<std::uint64_t> crc_failures_{0};
+    bool require_crc_ = false;
 };
 
 }  // namespace io

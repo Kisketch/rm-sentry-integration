@@ -42,6 +42,38 @@ bool parseAttitude(const uint8_t* data, std::size_t size, AttitudeFrame& out) {
     return true;
 }
 
+uint8_t crc8(const uint8_t* data, std::size_t size) {
+    uint8_t crc = 0;
+    for (std::size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; ++b) crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : crc << 1;
+    }
+    return crc;
+}
+
+uint8_t attitudeCrc(const uint8_t* frame) { return crc8(frame + 3, kAttitudeSize - 3); }
+
+bool parseAttitudeCrc(const uint8_t* data, std::size_t size, AttitudeFrame& out) {
+    if (!data || size < kAttitudeSize) return false;
+    if (data[2] != attitudeCrc(data)) return false;
+    return parseAttitude(data, size, out);
+}
+
+std::array<uint8_t, kAttitudeSize> packAttitude(const AttitudeFrame& f, bool with_crc) {
+    std::array<uint8_t, kAttitudeSize> b{};
+    b[0] = 0xAA;
+    b[1] = 0xBB;
+    constexpr double scale = 180.0 / 3.14159265358979323846 * 10000.0;
+    writeI32(b.data() + 3, static_cast<int32_t>(std::lround(wrapPi(f.yaw) * scale)));
+    writeI32(b.data() + 7, static_cast<int32_t>(std::lround(f.pitch * scale)));
+    // Inverse of the parser's convention: the wire carries roll + pi.
+    writeI32(b.data() + 11, static_cast<int32_t>(std::lround(wrapPi(f.roll + 3.14159265358979323846) * scale)));
+    b[15] = static_cast<uint8_t>(f.color);
+    b[16] = static_cast<uint8_t>(f.armor_or_buff);
+    b[2] = with_crc ? attitudeCrc(b.data()) : 0;
+    return b;
+}
+
 // 21-byte control frame: AA BB [yaw][pitch][yaw_vel][ui_x] found fire BB
 // The old AutoArmor::Transmit put the yaw rate into the ui_x slot; keeping that
 // mapping means the MCU does not need a new parser.

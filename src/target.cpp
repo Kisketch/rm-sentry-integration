@@ -6,6 +6,15 @@
 
 namespace autoaim {
 
+namespace {
+// Matching identity of an entry: the outpost is a singleton, robots are
+// keyed by deviceId so a same-number robot of another colour/size can
+// never be associated into the entry (label alone allowed that).
+std::string entryKey(const ArmorDetection& det) {
+    return (det.number == "outpost" || det.type == ArmorType::OUTPOST) ? "outpost" : deviceId(det);
+}
+}  // namespace
+
 TargetManager::TargetManager(const TrackerConfig& tracker_cfg, const TargetConfig& target_cfg,
                              const CameraModel& camera)
     : tracker_cfg_(tracker_cfg), target_cfg_(target_cfg), camera_(camera) {}
@@ -39,7 +48,7 @@ int TargetManager::matchEntry(const ArmorObservation& obs, double stamp) const {
     double best_d = std::numeric_limits<double>::max();
     for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
         const Entry& e = entries_[i];
-        if (e.label != obs.det.number && !(e.outpost && obs.det.number == "outpost")) continue;
+        if (e.key != entryKey(obs.det)) continue;
         const TargetState s = e.snapshot(stamp);
         const TrackState st = e.state();
         if (st == TrackState::LOST && e.last_seen <= 0) continue;
@@ -94,7 +103,7 @@ void TargetManager::update(const FrameObservations& frame) {
         // a duplicate behind and the duplicate steals observations.
         int reuse = -1;
         for (int e = 0; e < static_cast<int>(entries_.size()); ++e) {
-            if (entries_[e].label != seed.det.number || entries_[e].state() != TrackState::LOST)
+            if (entries_[e].key != entryKey(seed.det) || entries_[e].state() != TrackState::LOST)
                 continue;
             const TargetState old = entries_[e].snapshot(frame.stamp);
             for (int k = 0; k < old.armors_num; ++k) {
@@ -115,7 +124,7 @@ void TargetManager::update(const FrameObservations& frame) {
         for (int j = i + 1; j < static_cast<int>(frame.armors.size()); ++j) {
             if (assigned[j]) continue;
             const ArmorObservation& o = frame.armors[j];
-            if (o.det.number != seed.det.number) continue;
+            if (entryKey(o.det) != entryKey(seed.det)) continue;
             if (cv::norm(o.position - seed.position) > 2.0 * target_cfg_.association_gate) continue;
             init.armors.push_back(o);
             assigned[j] = true;
@@ -129,6 +138,7 @@ void TargetManager::update(const FrameObservations& frame) {
         }
 
         Entry e;
+        e.key = entryKey(seed.det);
         e.label = seed.det.number;
         if (seed.det.number == "outpost" || seed.det.type == ArmorType::OUTPOST) {
             e.label = "outpost";

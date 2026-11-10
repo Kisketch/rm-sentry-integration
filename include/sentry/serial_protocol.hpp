@@ -29,6 +29,22 @@ constexpr std::size_t kControlSize = 21;
 // Returns false for a bad header / short buffer.
 bool parseAttitude(const uint8_t* data, std::size_t size, AttitudeFrame& out);
 
+// --- Optional integrity extension (opt-in, byte-compatible) ---
+// Byte 2 of the attitude frame is unused in the legacy protocol.  A sender
+// supporting the extension stores a CRC-8/SMBUS (poly 0x07) of the payload
+// bytes 3..16 there.  Legacy receivers ignore byte 2, and parseAttitude
+// ignores it too, so the extension only takes effect where a receiver
+// explicitly requires it (SerialPort's require_crc).  Enabling it needs the
+// MCU firmware to fill byte 2; until then run with it off.
+// The control frame has no spare byte, so it cannot carry a CRC without a
+// length change; that stays a future protocol-v2 decision.
+uint8_t crc8(const uint8_t* data, std::size_t size);
+uint8_t attitudeCrc(const uint8_t* frame);  // frame must hold kAttitudeSize bytes
+bool parseAttitudeCrc(const uint8_t* data, std::size_t size, AttitudeFrame& out);
+// Reference packer (the vision side never sends attitude frames; this is
+// the format definition for the MCU side and for tests).
+std::array<uint8_t, kAttitudeSize> packAttitude(const AttitudeFrame& f, bool with_crc);
+
 // Pack a SerialCommand.  `ui_x` is the fourth int32 (the old yaw-rate/UI slot);
 // the MCU protocol only has four int32 payloads.
 std::array<uint8_t, kControlSize> packControl(const SerialCommand& cmd, int32_t ui_x = 0);
