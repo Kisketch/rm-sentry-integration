@@ -67,6 +67,7 @@ private:
     bool roi_enabled_ = false;
     std::vector<cv::Rect> roi_windows_;
     int frames_since_full_ = 0;
+    long frame_count_ = 0;  // sequential frame index for observations.frame
 };
 
 // Convert a command for the old sentry 21-byte frame (AA BB ... BB) so a

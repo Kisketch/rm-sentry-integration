@@ -23,7 +23,7 @@ SentryOutput SentryVision::process(const cv::Mat& bgr, double stamp, double gimb
     camera_.setGimbalAttitude(gimbal_yaw, gimbal_pitch, gimbal_roll);
 
     SentryOutput out;
-    out.observations.frame = static_cast<int>(std::lround(stamp * cfg_.eval.fps));
+    out.observations.frame = static_cast<int>(frame_count_++);
     out.observations.stamp = stamp;
 
     // Tracking-guided windows: build BEFORE detecting, from every active
