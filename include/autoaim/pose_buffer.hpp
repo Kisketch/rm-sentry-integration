@@ -88,9 +88,13 @@ private:
 // Maps a remote clock (MCU time, camera device time) onto the host clock.
 // The offset is the median of the most recent (local - remote) pair
 // differences, which rejects the occasional long transfer. Any *constant*
-// transfer delay folds into the offset - harmless, because it is also part
-// of the end-to-end latency that aimer.latency is measured against (G-02
-// step 3). What this removes is jitter, which is what the budget limits.
+// transfer delay folds into the offset.  That part is harmless for the
+// prediction horizon (aimer.latency is measured end to end), but NOT for the
+// attitude lookup: a camera stamp that is late by D relative to the attitude
+// stream rotates every measurement by gimbal_rate x D (largest during slews
+// and plate switches).  Remove the constant with a measured offset - see
+// delay_calibration.hpp (sentry_robot --calib-delay).  What the median itself
+// removes is jitter.
 class ClockAligner {
 public:
     explicit ClockAligner(std::size_t window = 64);

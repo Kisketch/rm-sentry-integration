@@ -4,12 +4,14 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <string>
 #include <vector>
 
 #include "autoaim/aimer.hpp"
 #include "autoaim/detector.hpp"
 #include "autoaim/ballistics.hpp"
+#include "autoaim/delay_calibration.hpp"
 #include "autoaim/pose.hpp"
 #include "autoaim/pose_buffer.hpp"
 #include "autoaim/target.hpp"
@@ -528,6 +530,52 @@ void testConfigValidation() {
     CHECK(c.validate().size() == 4);
 }
 
+// Delay calibration: static plate, sweeping gimbal, frames stamped 12 ms
+// after their true exposure; the calibrator must recover the 12 ms.
+void testDelayCalibration() {
+    const double true_delay = 0.012;
+    const cv::Vec3d plate(5.0, 0.3, 0.1);
+    auto R_at = [](double t, double amp) {
+        const double yaw = amp * std::sin(2 * autoaim::kPi * 0.8 * t);
+        const double pitch = 0.25 * amp * std::sin(2 * autoaim::kPi * 0.5 * t);
+        return autoaim::quatToMat(autoaim::quatFromYawPitchRoll(yaw, -pitch, 0.0));
+    };
+    for (double amp : {0.4, 0.0}) {
+        // attitude stream: 200 Hz, stamped at its true sample time
+        autoaim::PoseBuffer att(4096, 0.05);
+        for (int i = 0; i < 2400; ++i) {
+            const double t = i * 0.005;
+            att.push({t, autoaim::quatFromYawPitchRoll(amp * std::sin(2 * autoaim::kPi * 0.8 * t),
+                                                       -0.25 * amp * std::sin(2 * autoaim::kPi * 0.5 * t), 0.0)});
+        }
+        autoaim::DelayCalibrator cal(-0.01, 0.05, 0.0005);
+        std::mt19937 rng(7);
+        std::normal_distribution<double> noise(0.0, 0.01);  // 1 cm measurement noise
+        const auto lookup = [&att](double t, cv::Matx33d& R) {
+            autoaim::Quat q;
+            if (!att.query(t, q)) return false;
+            R = autoaim::quatToMat(q);
+            return true;
+        };
+        for (int n = 0; n < 250; ++n) {  // 25 fps for 10 s
+            const double t_exp = 0.5 + n * 0.04;
+            const cv::Vec3d pg = R_at(t_exp, amp).t() * plate;
+            cal.add(t_exp + true_delay, pg + cv::Vec3d(noise(rng), noise(rng), noise(rng)));
+            cal.resolve(t_exp - 0.1, lookup);  // attitude arrives "later"
+        }
+        cal.resolve(1e9, lookup);
+        const autoaim::DelayEstimate e = cal.estimate();
+        if (amp > 0) {
+            CHECK(e.ok);
+            CHECK(std::abs(e.delay - true_delay) < 0.001);
+            CHECK(e.spread < 0.5 * e.spread_at_zero);
+            CHECK(e.frames >= 240);
+        } else {
+            CHECK(!e.ok);  // no excitation: must refuse to guess
+        }
+    }
+}
+
 }  // namespace
 
 void testDetectorDegenerateInputs() {
@@ -565,6 +613,7 @@ int main() {
     testPoseBufferExtrapolation();
     testMergeWindows();
     testConfigValidation();
+    testDelayCalibration();
     if (failures == 0) {
         std::cout << "ALL SENTRY TESTS PASSED\n";
         return 0;

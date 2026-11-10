@@ -20,6 +20,7 @@ add_library(autoaim_core STATIC
     src/aimer.cpp
     src/sentry.cpp
     src/roi.cpp
+    src/delay_calibration.cpp
     src/serial_protocol.cpp
     src/evaluation.cpp
     src/draw.cpp)
